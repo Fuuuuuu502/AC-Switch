@@ -242,6 +242,17 @@ fn spawn_node(script: &Path, extra_env: &[(&str, String)]) -> Result<Child, Stri
     cmd.spawn().map_err(|e| format!("failed to start {}: {e}", script.display()))
 }
 
+fn kill_port(port: u16) {
+    if let Ok(output) = Command::new("lsof")
+        .args(["-nP", "-tiTCP", &format!(":{port}"), "-sTCP:LISTEN"])
+        .output()
+    {
+        for pid in String::from_utf8_lossy(&output.stdout).split_whitespace() {
+            let _ = Command::new("kill").args(["-9", pid]).status();
+        }
+    }
+}
+
 fn stop_child(child: &mut Option<Child>) {
     if let Some(proc) = child.as_mut() {
         let _ = proc.kill();
@@ -279,6 +290,8 @@ fn start_backend(app: &AppHandle, state: &AppState, provider: &Provider) -> Resu
     let mut runtime = state.runtime.lock().map_err(|e| e.to_string())?;
     stop_child(&mut runtime.relay);
     stop_child(&mut runtime.bridge);
+    kill_port(BRIDGE_PORT);
+    kill_port(RELAY_PORT);
 
     let bridge_env = vec![
         ("ACCIO_OPENCODE_PORT", BRIDGE_PORT.to_string()),
@@ -311,6 +324,8 @@ fn stop_backend(state: &AppState) -> Result<(), String> {
     let mut runtime = state.runtime.lock().map_err(|e| e.to_string())?;
     stop_child(&mut runtime.relay);
     stop_child(&mut runtime.bridge);
+    kill_port(BRIDGE_PORT);
+    kill_port(RELAY_PORT);
     Ok(())
 }
 
@@ -336,7 +351,11 @@ struct UpsertProviderInput {
 }
 
 #[tauri::command]
-fn upsert_provider(input: UpsertProviderInput) -> Result<AppConfig, String> {
+fn upsert_provider(
+    app: AppHandle,
+    state: State<AppState>,
+    input: UpsertProviderInput,
+) -> Result<AppConfig, String> {
     if input.kind != "opencode_go" && input.kind != "custom_openai" {
         return Err("unsupported provider kind".into());
     }
@@ -363,11 +382,14 @@ fn upsert_provider(input: UpsertProviderInput) -> Result<AppConfig, String> {
         has_key: false,
     });
     if let Some(existing) = cfg.providers.iter_mut().find(|p| p.id == id) {
-        *existing = provider;
+        *existing = provider.clone();
     } else {
-        cfg.providers.push(provider);
+        cfg.providers.push(provider.clone());
     }
     save_config(&cfg)?;
+    if cfg.active_provider_id == id {
+        start_backend(&app, &state, &provider)?;
+    }
     get_config()
 }
 

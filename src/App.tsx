@@ -123,6 +123,8 @@ export default function App() {
 
   async function saveProvider() {
     if (!editing) return;
+    const savedId = editing.id;
+    const shouldApply = Boolean(savedId) && savedId === activeId;
     await run(async () => {
       const next = await invoke<AppConfig>("upsert_provider", {
         input: {
@@ -137,6 +139,10 @@ export default function App() {
       });
       setConfig(next);
       setEditing(null);
+      if (shouldApply) {
+        const nextStatus = await invoke<AppStatus>("apply_provider", { id: savedId });
+        setStatus(nextStatus);
+      }
     });
   }
 
@@ -314,6 +320,9 @@ export default function App() {
                       </option>
                     ))}
                   </select>
+                  <div className="mt-1 text-[11px] text-gray-500">
+                    Accio 里的模型名来自正在运行的中继。改档位后点保存（当前供应商会立刻热更新），或再点一次启用。
+                  </div>
                 </label>
               </div>
               <label className="block">
