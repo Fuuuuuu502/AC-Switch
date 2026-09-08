@@ -22,6 +22,13 @@ fn output(mut cmd: Command) -> Result<String, String> {
         .map_err(|e| e.to_string())
 }
 
+fn join_components(mut path: PathBuf, components: &[&str]) -> PathBuf {
+    for component in components {
+        path.push(component);
+    }
+    path
+}
+
 pub(super) fn accio_exe() -> Result<PathBuf, String> {
     if let Some(path) = std::env::var_os("ACCIO_SWITCH_ACCIO_PATH") {
         let path = PathBuf::from(path);
@@ -34,14 +41,14 @@ pub(super) fn accio_exe() -> Result<PathBuf, String> {
         }
         return Err("ACCIO_SWITCH_ACCIO_PATH 必须指向已安装的 Accio.exe。".into());
     }
-    for (base, suffix) in [
-        ("LOCALAPPDATA", "Programs/Accio/Accio.exe"),
-        ("LOCALAPPDATA", "Accio/Accio.exe"),
-        ("ProgramFiles", "Accio/Accio.exe"),
-        ("ProgramFiles(x86)", "Accio/Accio.exe"),
+    for (base, components) in [
+        ("LOCALAPPDATA", &["Programs", "Accio", "Accio.exe"][..]),
+        ("LOCALAPPDATA", &["Accio", "Accio.exe"][..]),
+        ("ProgramFiles", &["Accio", "Accio.exe"][..]),
+        ("ProgramFiles(x86)", &["Accio", "Accio.exe"][..]),
     ] {
         if let Some(base) = std::env::var_os(base) {
-            let path = PathBuf::from(base).join(suffix);
+            let path = join_components(PathBuf::from(base), components);
             if path.is_file() {
                 return Ok(path);
             }
@@ -75,12 +82,7 @@ fn accio_command(script: &str) -> Result<Command, String> {
 }
 
 pub(super) fn accio_running() -> bool {
-    if isolated() {
-        return false;
-    }
-    accio_command("[Console]::Write($accioProcesses.Count -gt 0)")
-        .and_then(output)
-        .is_ok_and(|s| s == "True")
+    accio_process_status().0
 }
 
 pub(super) fn quit_accio() -> Result<(), String> {
@@ -98,6 +100,15 @@ do {
   if($remaining.Count -eq 0) { exit 0 }
   Start-Sleep -Milliseconds 200
 } while([DateTime]::UtcNow -lt $deadline)
+foreach($p in $remaining) {
+  Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue
+}
+$forceDeadline=[DateTime]::UtcNow.AddSeconds(3)
+do {
+  $remaining=@(Get-CimInstance Win32_Process -Filter "Name='Accio.exe'" | Where-Object { $_.ExecutablePath -eq $env:ACCIO_SWITCH_EXE })
+  if($remaining.Count -eq 0) { exit 0 }
+  Start-Sleep -Milliseconds 100
+} while([DateTime]::UtcNow -lt $forceDeadline)
 exit 1
 "#)?).map(|_| ()).map_err(|_| "Accio 未能正常退出，请保存任务并手动退出 Accio 后重试。".into())
 }
@@ -133,16 +144,25 @@ pub(super) fn launchctl_unset(_key: &str) {
 }
 
 pub(super) fn accio_using_relay() -> bool {
+    accio_process_status().1
+}
+
+pub(super) fn accio_process_status() -> (bool, bool) {
     if isolated() {
-        return false;
+        return (false, false);
     }
     let script = format!(
-        r#"$ids=@($accioProcesses | ForEach-Object {{ $_.ProcessId }}); $connections=@(Get-NetTCPConnection -State Established -RemotePort {} -ErrorAction SilentlyContinue | Where-Object {{ $_.RemoteAddress -eq '127.0.0.1' -and $_.OwningProcess -in $ids }}); [Console]::Write($connections.Count -gt 0)"#,
+        r#"if($accioProcesses.Count -eq 0) {{ [Console]::Write('False|False'); exit 0 }}; $usingRelay=$false; try {{ $ids=@($accioProcesses | ForEach-Object {{ $_.ProcessId }}); $connections=@(Get-NetTCPConnection -State Established -RemotePort {} -ErrorAction Stop | Where-Object {{ $_.RemoteAddress -eq '127.0.0.1' -and $_.OwningProcess -in $ids }}); $usingRelay=$connections.Count -gt 0 }} catch {{ }}; [Console]::Write('True|' + $usingRelay.ToString())"#,
         relay_port()
     );
     accio_command(&script)
         .and_then(output)
-        .is_ok_and(|s| s == "True")
+        .ok()
+        .and_then(|value| {
+            let mut parts = value.split('|');
+            Some((parts.next()? == "True", parts.next()? == "True"))
+        })
+        .unwrap_or((false, false))
 }
 
 pub(super) fn clear_owned_orphans(port: u16, _node: &Path, _script: &Path) -> Result<(), String> {
@@ -214,6 +234,19 @@ pub(super) fn keychain_delete(_account: &str) {}
 #[cfg(all(test, target_os = "windows"))]
 mod tests {
     use super::*;
+
+    #[test]
+    fn accio_candidate_uses_native_windows_separators() {
+        let path = join_components(
+            PathBuf::from(r"C:\Users\Example\AppData\Local"),
+            &["Programs", "Accio", "Accio.exe"],
+        );
+        assert_eq!(
+            path,
+            PathBuf::from(r"C:\Users\Example\AppData\Local\Programs\Accio\Accio.exe")
+        );
+        assert!(!path.to_string_lossy().contains('/'));
+    }
 
     #[test]
     fn dpapi_roundtrip_and_ciphertext() {

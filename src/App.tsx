@@ -50,6 +50,7 @@ type AppConfig = {
 };
 
 type AppStatus = {
+  initializing?: boolean;
   runtimeError?: string;
   accioRunning: boolean;
   relayOk: boolean;
@@ -149,7 +150,7 @@ export default function App() {
   const [pendingDelete, setPendingDelete] = useState("");
 
   const providers = useMemo(() => [OFFICIAL, ...(config?.providers || [])], [config]);
-  const busy = Boolean(busyAction);
+  const busy = Boolean(busyAction) || !status || Boolean(status.initializing);
   const activeId = status?.activeProviderId || config?.activeProviderId || "official";
   const activeProvider = providers.find((item) => item.id === activeId) || OFFICIAL;
 
@@ -163,11 +164,18 @@ export default function App() {
   }
 
   useEffect(() => {
-    refresh().catch((e) => setError(String(e)));
-    const timer = setInterval(() => {
-      invoke<AppStatus>("get_status").then(setStatus).catch(() => {});
-    }, 2500);
-    return () => clearInterval(timer);
+    let disposed = false;
+    let timer: ReturnType<typeof setTimeout>;
+    async function poll() {
+      try {
+        const next = await invoke<AppStatus>("get_status");
+        if (!disposed) setStatus(next);
+      } catch { /* A user action reports errors; background polling retries later. */ }
+      if (!disposed) timer = setTimeout(poll, 5000);
+    }
+    invoke<AppConfig>("get_config").then(next => { if (!disposed) setConfig(next); }).catch(e => { if (!disposed) setError(String(e)); });
+    void poll();
+    return () => { disposed = true; clearTimeout(timer); };
   }, []);
 
   async function run<T>(action: string, fn: () => Promise<T>) {
@@ -250,7 +258,17 @@ export default function App() {
   };
 
   const missingRequiredKey = status?.bridgeAuthType === "api_key" && status.bridgeApiKeyConfigured === false;
-  const connectionReady = Boolean(!missingRequiredKey && status?.relayOk && (activeId === "official" || status.bridgeOk) && !status.runtimeError);
+  const backendReady = Boolean(!missingRequiredKey && status?.relayOk && (activeId === "official" || status.bridgeOk) && !status.runtimeError);
+  const connectionReady = Boolean(backendReady && status?.accioRunning && status.accioUsingRelay);
+  const connectionText = status?.initializing
+    ? "正在启动"
+    : !backendReady
+      ? status ? "后端未就绪" : "正在检查"
+      : !status?.accioRunning
+        ? "等待 Accio"
+        : !status.accioUsingRelay
+          ? "Accio 尚未接入"
+          : "本地通道已接入";
   const message = error || status?.runtimeError;
 
   return (
@@ -287,7 +305,7 @@ export default function App() {
             <span className="current-icon"><Waypoints size={25} strokeWidth={1.5} /></span>
             <div className="current-copy"><div className="eyebrow">当前对话通道</div><h2>{activeProvider.name}</h2><p title={activeProvider.model}>{activeProvider.model}{activeId !== "official" ? ` · ${EFFORT_LABEL[activeProvider.reasoningEffort] || activeProvider.reasoningEffort}` : ""}</p></div>
           </div>
-          <span className={clsx("state-badge", connectionReady ? "state-ready" : "state-idle")}><span className="status-dot" />{connectionReady ? "本地通道就绪" : status ? "尚未就绪" : "正在检查"}</span>
+          <span className={clsx("state-badge", connectionReady ? "state-ready" : "state-idle")}><span className="status-dot" />{connectionText}</span>
         </section>
 
         <section className="providers-section" aria-labelledby="providers-title">

@@ -1,8 +1,12 @@
 use serde::{Deserialize, Serialize};
+#[cfg(target_os = "windows")]
+use std::ffi::OsString;
 use std::fs;
-use std::io::Write;
+use std::io::{BufRead, BufReader, Read, Write};
+use std::net::{Ipv4Addr, SocketAddr, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use std::time::Duration;
 use tauri::{
@@ -16,7 +20,11 @@ use uuid::Uuid;
 #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 mod windows;
 #[cfg(target_os = "windows")]
-use windows::{accio_running, quit_accio, open_accio, install_hook, launchctl_unset, accio_using_relay, clear_owned_orphans, file_set, file_get, keychain_set, keychain_get, keychain_delete};
+use windows::{
+    accio_process_status, accio_running, accio_using_relay, clear_owned_orphans, file_get,
+    file_set, install_hook, keychain_delete, keychain_get, keychain_set, launchctl_unset,
+    open_accio, quit_accio,
+};
 
 fn command(program: impl AsRef<std::ffi::OsStr>) -> Command {
     #[allow(unused_mut)]
@@ -27,6 +35,38 @@ fn command(program: impl AsRef<std::ffi::OsStr>) -> Command {
         cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW for background helpers.
     }
     cmd
+}
+
+#[cfg(target_os = "windows")]
+fn node_compatible_path(path: &Path) -> PathBuf {
+    use std::os::windows::ffi::{OsStrExt, OsStringExt};
+
+    const VERBATIM: &[u16] = &[b'\\' as u16, b'\\' as u16, b'?' as u16, b'\\' as u16];
+    const VERBATIM_UNC: &[u16] = &[
+        b'\\' as u16,
+        b'\\' as u16,
+        b'?' as u16,
+        b'\\' as u16,
+        b'U' as u16,
+        b'N' as u16,
+        b'C' as u16,
+        b'\\' as u16,
+    ];
+    let wide: Vec<u16> = path.as_os_str().encode_wide().collect();
+    if wide.starts_with(VERBATIM_UNC) {
+        let mut normalized = vec![b'\\' as u16, b'\\' as u16];
+        normalized.extend_from_slice(&wide[VERBATIM_UNC.len()..]);
+        return PathBuf::from(OsString::from_wide(&normalized));
+    }
+    if wide.starts_with(VERBATIM) {
+        return PathBuf::from(OsString::from_wide(&wide[VERBATIM.len()..]));
+    }
+    path.to_path_buf()
+}
+
+#[cfg(not(target_os = "windows"))]
+fn node_compatible_path(path: &Path) -> PathBuf {
+    path.to_path_buf()
 }
 
 fn isolated() -> bool {
@@ -117,6 +157,7 @@ pub struct AppConfig {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AppStatus {
+    initializing: bool,
     pub runtime_error: String,
     pub accio_running: bool,
     pub relay_ok: bool,
@@ -135,6 +176,8 @@ struct RuntimeState {
 }
 
 struct AppState {
+    operation: Mutex<()>,
+    initializing: AtomicBool,
     runtime: Mutex<RuntimeState>,
     tray: Mutex<Option<TrayIcon>>,
     error: Mutex<String>,
@@ -427,11 +470,13 @@ fn sidecar_dir(app: &AppHandle) -> Result<PathBuf, String> {
 
 fn node_bin(app: &AppHandle) -> Result<PathBuf, String> {
     if !cfg!(debug_assertions) {
-        let path = app
-            .path()
-            .resource_dir()
-            .map_err(|e| e.to_string())?
-            .join(if cfg!(target_os = "windows") { "runtime/node.exe" } else { "runtime/node" });
+        let path = app.path().resource_dir().map_err(|e| e.to_string())?.join(
+            if cfg!(target_os = "windows") {
+                "runtime/node.exe"
+            } else {
+                "runtime/node"
+            },
+        );
         if !path.is_file() {
             return Err(format!("内置 Node 缺失，请重新安装：{}", path.display()));
         }
@@ -448,14 +493,86 @@ fn node_bin(app: &AppHandle) -> Result<PathBuf, String> {
     .unwrap_or_else(|| PathBuf::from("node")))
 }
 
+fn local_http_body(url: &str) -> Option<Vec<u8>> {
+    let target = url.strip_prefix("http://127.0.0.1:")?;
+    let (port, path) = target.split_once('/')?;
+    let address = SocketAddr::from((Ipv4Addr::LOCALHOST, port.parse::<u16>().ok()?));
+    let timeout = Duration::from_secs(1);
+    let mut stream = TcpStream::connect_timeout(&address, timeout).ok()?;
+    stream.set_read_timeout(Some(timeout)).ok()?;
+    stream.set_write_timeout(Some(timeout)).ok()?;
+    stream
+        .write_all(
+            format!("GET /{path} HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n")
+                .as_bytes(),
+        )
+        .ok()?;
+    stream.flush().ok()?;
+
+    let mut reader = BufReader::new(stream);
+    let mut status = String::new();
+    reader.read_line(&mut status).ok()?;
+    if !status.starts_with("HTTP/1.1 200 ") && !status.starts_with("HTTP/1.0 200 ") {
+        return None;
+    }
+
+    let mut content_length = None;
+    let mut chunked = false;
+    loop {
+        let mut header = String::new();
+        reader.read_line(&mut header).ok()?;
+        if header == "\r\n" || header == "\n" {
+            break;
+        }
+        if let Some((name, value)) = header.split_once(':') {
+            if name.eq_ignore_ascii_case("content-length") {
+                content_length = value.trim().parse::<usize>().ok();
+            } else if name.eq_ignore_ascii_case("transfer-encoding") {
+                chunked = value
+                    .split(',')
+                    .any(|encoding| encoding.trim().eq_ignore_ascii_case("chunked"));
+            }
+        }
+    }
+
+    if let Some(size) = content_length {
+        if size > 256 * 1024 {
+            return None;
+        }
+        let mut body = vec![0_u8; size];
+        reader.read_exact(&mut body).ok()?;
+        return Some(body);
+    }
+    if chunked {
+        let mut body = Vec::new();
+        loop {
+            let mut size_line = String::new();
+            reader.read_line(&mut size_line).ok()?;
+            let size = usize::from_str_radix(size_line.trim().split(';').next()?, 16).ok()?;
+            if size == 0 {
+                return Some(body);
+            }
+            if body.len().checked_add(size)? > 256 * 1024 {
+                return None;
+            }
+            let start = body.len();
+            body.resize(start + size, 0);
+            reader.read_exact(&mut body[start..]).ok()?;
+            let mut ending = [0_u8; 2];
+            reader.read_exact(&mut ending).ok()?;
+            if ending != *b"\r\n" {
+                return None;
+            }
+        }
+    }
+
+    let mut body = Vec::new();
+    reader.take(256 * 1024).read_to_end(&mut body).ok()?;
+    Some(body)
+}
+
 fn http_ok(url: &str) -> bool {
-    command("curl")
-        .args(["-fsS", "--max-time", "1", url])
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false)
+    local_http_body(url).is_some()
 }
 
 #[cfg(not(target_os = "windows"))]
@@ -469,6 +586,11 @@ fn accio_running() -> bool {
         .status()
         .map(|s| s.success())
         .unwrap_or(false)
+}
+
+#[cfg(not(target_os = "windows"))]
+fn accio_process_status() -> (bool, bool) {
+    (accio_running(), accio_using_relay())
 }
 
 #[cfg(not(target_os = "windows"))]
@@ -561,15 +683,20 @@ fn spawn_node(
     extra_env: &[(&str, String)],
     log_path: &Path,
 ) -> Result<Child, String> {
+    // Tauri returns verbatim resource paths (\\?\C:\...) on Windows. Node 24
+    // interprets such a main-module argument as the drive root and exits with
+    // EISDIR, so pass ordinary drive/UNC paths to the embedded runtime.
+    let node = node_compatible_path(node);
+    let script = node_compatible_path(script);
     let log = fs::OpenOptions::new()
         .create(true)
         .append(true)
         .open(log_path)
         .map_err(|e| e.to_string())?;
     let err = log.try_clone().map_err(|e| e.to_string())?;
-    let mut cmd = command(node);
+    let mut cmd = command(&node);
     cmd.env_remove("NODE_OPTIONS").env_remove("NODE_PATH");
-    cmd.arg(script)
+    cmd.arg(&script)
         .stdin(Stdio::null())
         .stdout(Stdio::from(log))
         .stderr(Stdio::from(err));
@@ -679,7 +806,10 @@ fn detect_accio_paths() -> (String, String) {
     #[cfg(not(target_os = "windows"))]
     let asar = PathBuf::from("/Applications/Accio.app/Contents/Resources/app.asar");
     #[cfg(target_os = "windows")]
-    let asar = match windows::accio_exe().ok().and_then(|exe| exe.parent().map(|dir| dir.join("resources/app.asar"))) {
+    let asar = match windows::accio_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(|dir| dir.join("resources/app.asar")))
+    {
         Some(path) => path,
         None => return (default_model.join(","), default_image.join(",")),
     };
@@ -921,9 +1051,17 @@ fn ensure_running(child: &mut Option<Child>, name: &str) -> Result<(), String> {
     match child {
         Some(proc) => match proc.try_wait() {
             Ok(None) => Ok(()),
-            Ok(Some(status)) => Err(format!(
-                "{name} 立刻退出（{status}）。查看 ~/.accio-switch/bridge.log"
-            )),
+            Ok(Some(status)) => {
+                let log = config_dir()?.join(if name == "gateway relay" {
+                    "relay-stdout.log"
+                } else {
+                    "bridge.log"
+                });
+                Err(format!(
+                    "{name} 立刻退出（{status}）。查看 {}",
+                    log.display()
+                ))
+            }
             Err(err) => Err(format!("{name} wait failed: {err}")),
         },
         None => Err(format!("{name} was not started")),
@@ -937,7 +1075,7 @@ fn stop_backend(state: &AppState) -> Result<(), String> {
     Ok(())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn get_config() -> Result<AppConfig, String> {
     let mut cfg = load_config()?;
     for provider in &mut cfg.providers {
@@ -962,58 +1100,64 @@ struct UpsertProviderInput {
     api_key: Option<String>,
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn upsert_provider(
     app: AppHandle,
     state: State<AppState>,
     input: UpsertProviderInput,
 ) -> Result<AppConfig, String> {
-    if input.kind != "opencode_go" && input.kind != "custom_openai" {
-        return Err("unsupported provider kind".into());
-    }
-    let mut cfg = load_config()?;
-    let id = input
-        .id
-        .filter(|v| !v.is_empty())
-        .unwrap_or_else(|| Uuid::new_v4().to_string());
-    key_file(&id)?;
-    if id == "official" || id == IMAGE_ACCOUNT {
-        return Err("不能使用保留的供应商标识".into());
-    }
-    if let Some(key) = input.api_key {
-        let trimmed = key.trim().to_string();
-        if trimmed.is_empty() {
-            secret_delete(&id);
-        } else {
-            secret_set(&id, &trimmed)?;
+    let config = {
+        let _operation = state.operation.lock().map_err(|e| e.to_string())?;
+        if input.kind != "opencode_go" && input.kind != "custom_openai" {
+            return Err("unsupported provider kind".into());
         }
-    }
-    let provider = with_has_key(Provider {
-        id: id.clone(),
-        kind: input.kind,
-        name: input.name,
-        endpoint: input.endpoint,
-        model: input.model,
-        reasoning_effort: input.reasoning_effort,
-        api_protocol: input
-            .api_protocol
-            .filter(|value| !value.trim().is_empty())
-            .unwrap_or_else(default_protocol),
-        image_endpoint: input.image_endpoint.unwrap_or_default(),
-        image_model: input.image_model.unwrap_or_default(),
-        has_key: false,
-    });
-    if let Some(existing) = cfg.providers.iter_mut().find(|p| p.id == id) {
-        *existing = provider.clone();
-    } else {
-        cfg.providers.push(provider.clone());
-    }
-    save_config(&cfg)?;
-    if cfg.active_provider_id == id {
-        start_backend(&app, &state, &provider)?;
-    }
+        let mut cfg = load_config()?;
+        let id = input
+            .id
+            .filter(|v| !v.is_empty())
+            .unwrap_or_else(|| Uuid::new_v4().to_string());
+        key_file(&id)?;
+        if id == "official" || id == IMAGE_ACCOUNT {
+            return Err("不能使用保留的供应商标识".into());
+        }
+        if let Some(key) = input.api_key {
+            let trimmed = key.trim().to_string();
+            if trimmed.is_empty() {
+                secret_delete(&id);
+            } else {
+                secret_set(&id, &trimmed)?;
+            }
+        }
+        let provider = with_has_key(Provider {
+            id: id.clone(),
+            kind: input.kind,
+            name: input.name,
+            endpoint: input.endpoint,
+            model: input.model,
+            reasoning_effort: input.reasoning_effort,
+            api_protocol: input
+                .api_protocol
+                .filter(|value| !value.trim().is_empty())
+                .unwrap_or_else(default_protocol),
+            image_endpoint: input.image_endpoint.unwrap_or_default(),
+            image_model: input.image_model.unwrap_or_default(),
+            has_key: false,
+        });
+        if let Some(existing) = cfg.providers.iter_mut().find(|p| p.id == id) {
+            *existing = provider.clone();
+        } else {
+            cfg.providers.push(provider.clone());
+        }
+        save_config(&cfg)?;
+        if cfg.active_provider_id == id {
+            start_backend(&app, &state, &provider)?;
+        }
+        get_config()?
+    };
+    // Menu updates may marshal onto the UI thread. Never wait for one while
+    // holding the operation mutex, because Exit also serializes on that mutex.
     rebuild_tray_menu(&app)?;
-    get_config()
+    Ok(config)
 }
 
 #[derive(Deserialize)]
@@ -1050,75 +1194,77 @@ fn restart_active_backend(app: &AppHandle, state: &AppState) -> Result<(), Strin
     start_backend(app, state, &provider)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn upsert_image_channel(
     app: AppHandle,
     state: State<AppState>,
     input: UpsertImageInput,
 ) -> Result<AppConfig, String> {
-    if input.enabled && input.model.trim().is_empty() {
-        return Err("启用图片通道时请填写图片模型，例如 gpt-image-1".into());
-    }
-    if let Some(key) = input.api_key {
-        let trimmed = key.trim().to_string();
-        if trimmed.is_empty() {
-            secret_delete(IMAGE_ACCOUNT);
-        } else {
-            secret_set(IMAGE_ACCOUNT, &trimmed)?;
+    let config = {
+        let _operation = state.operation.lock().map_err(|e| e.to_string())?;
+        if input.enabled && input.model.trim().is_empty() {
+            return Err("启用图片通道时请填写图片模型，例如 gpt-image-1".into());
         }
-    }
-    let mut cfg = load_config()?;
-    cfg.image_channel.enabled = input.enabled;
-    cfg.image_channel.endpoint = input.endpoint.trim().to_string();
-    cfg.image_channel.model = input.model.trim().to_string();
-    save_config(&cfg)?;
-    if cfg.active_provider_id != "official" {
-        restart_active_backend(&app, &state)?;
-    }
-    get_config()
+        if let Some(key) = input.api_key {
+            let trimmed = key.trim().to_string();
+            if trimmed.is_empty() {
+                secret_delete(IMAGE_ACCOUNT);
+            } else {
+                secret_set(IMAGE_ACCOUNT, &trimmed)?;
+            }
+        }
+        let mut cfg = load_config()?;
+        cfg.image_channel.enabled = input.enabled;
+        cfg.image_channel.endpoint = input.endpoint.trim().to_string();
+        cfg.image_channel.model = input.model.trim().to_string();
+        save_config(&cfg)?;
+        if cfg.active_provider_id != "official" {
+            restart_active_backend(&app, &state)?;
+        }
+        get_config()?
+    };
+    Ok(config)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn delete_provider(
     app: AppHandle,
     state: State<AppState>,
     id: String,
 ) -> Result<AppConfig, String> {
-    key_file(&id)?;
-    if id == "official" || id == IMAGE_ACCOUNT {
-        return Err("不能删除保留标识".into());
-    }
-    let mut cfg = load_config()?;
-    if !cfg.providers.iter().any(|p| p.id == id) {
-        return Err("供应商不存在".into());
-    }
-    let was_active = cfg.active_provider_id == id;
-    if was_active {
-        apply_provider(app.clone(), state.clone(), "official".into())?;
-        cfg.active_provider_id = "official".into();
-    }
-    cfg.providers.retain(|p| p.id != id);
-    secret_delete(&id);
-    save_config(&cfg)?;
+    let config = {
+        let _operation = state.operation.lock().map_err(|e| e.to_string())?;
+        key_file(&id)?;
+        if id == "official" || id == IMAGE_ACCOUNT {
+            return Err("不能删除保留标识".into());
+        }
+        let mut cfg = load_config()?;
+        if !cfg.providers.iter().any(|p| p.id == id) {
+            return Err("供应商不存在".into());
+        }
+        let was_active = cfg.active_provider_id == id;
+        if was_active {
+            apply_provider_inner(app.clone(), state.clone(), "official".into())?;
+            cfg.active_provider_id = "official".into();
+        }
+        cfg.providers.retain(|p| p.id != id);
+        secret_delete(&id);
+        save_config(&cfg)?;
+        get_config()?
+    };
     rebuild_tray_menu(&app)?;
-    get_config()
+    Ok(config)
 }
 
 fn curl_json(url: &str) -> Option<serde_json::Value> {
-    let output = command("curl")
-        .args(["-fsS", "--max-time", "1", url])
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    serde_json::from_slice(&output.stdout).ok()
+    serde_json::from_slice(&local_http_body(url)?).ok()
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn get_status(state: State<AppState>) -> Result<AppStatus, String> {
     let cfg = load_config()?;
     let health = curl_json(&format!("{}/healthz", bridge_url()));
+    let (is_accio_running, is_accio_using_relay) = accio_process_status();
     let bridge_auth_type = health
         .as_ref()
         .and_then(|value| value.get("authType"))
@@ -1131,8 +1277,9 @@ fn get_status(state: State<AppState>) -> Result<AppStatus, String> {
         .and_then(|value| value.as_bool())
         .unwrap_or(false);
     Ok(AppStatus {
+        initializing: state.initializing.load(Ordering::SeqCst),
         runtime_error: state.error.lock().map_err(|e| e.to_string())?.clone(),
-        accio_running: accio_running(),
+        accio_running: is_accio_running,
         relay_ok: http_ok(&format!("{}/healthz", relay_url())),
         bridge_ok: health.is_some(),
         active_provider_id: cfg.active_provider_id,
@@ -1140,12 +1287,25 @@ fn get_status(state: State<AppState>) -> Result<AppStatus, String> {
         bridge_auth_type,
         bridge_api_key_configured,
         accio_restarted: false,
-        accio_using_relay: accio_using_relay(),
+        accio_using_relay: is_accio_using_relay,
     })
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn apply_provider(app: AppHandle, state: State<AppState>, id: String) -> Result<AppStatus, String> {
+    let status = {
+        let _operation = state.operation.lock().map_err(|e| e.to_string())?;
+        apply_provider_inner(app.clone(), state.clone(), id)?
+    };
+    rebuild_tray_menu(&app)?;
+    Ok(status)
+}
+
+fn apply_provider_inner(
+    app: AppHandle,
+    state: State<AppState>,
+    id: String,
+) -> Result<AppStatus, String> {
     let mut cfg = load_config()?;
     let provider = if id == "official" {
         Provider {
@@ -1181,17 +1341,17 @@ fn apply_provider(app: AppHandle, state: State<AppState>, id: String) -> Result<
     } else {
         maybe_open_or_restart_accio()?
     };
-    let _ = rebuild_tray_menu(&app);
     let mut status = get_status(state)?;
     status.accio_restarted = accio_restarted;
     Ok(status)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn restart_accio(state: State<AppState>) -> Result<AppStatus, String> {
+    let _operation = state.operation.lock().map_err(|e| e.to_string())?;
     quit_accio()?;
     open_accio()?;
-    get_status(state)
+    get_status(state.clone())
 }
 
 fn make_tray_menu(app: &AppHandle) -> Result<Menu<tauri::Wry>, String> {
@@ -1251,8 +1411,7 @@ fn rebuild_tray_menu(app: &AppHandle) -> Result<(), String> {
 
 fn build_tray(app: &AppHandle) -> Result<(), String> {
     let menu = make_tray_menu(app)?;
-    let icon =
-        Image::from_bytes(include_bytes!("../icons/tray.png")).map_err(|e| e.to_string())?;
+    let icon = Image::from_bytes(include_bytes!("../icons/tray.png")).map_err(|e| e.to_string())?;
     let tray = TrayIconBuilder::new()
         .icon(icon)
         .icon_as_template(true)
@@ -1268,7 +1427,12 @@ fn build_tray(app: &AppHandle) -> Result<(), String> {
                 return;
             }
             if id == "restart" {
-                let _ = restart_accio(app.state::<AppState>());
+                let handle = app.clone();
+                tauri::async_runtime::spawn_blocking(move || {
+                    if let Err(err) = restart_accio(handle.state::<AppState>()) {
+                        *handle.state::<AppState>().error.lock().unwrap() = err;
+                    }
+                });
                 return;
             }
             if id == "quit" {
@@ -1276,10 +1440,15 @@ fn build_tray(app: &AppHandle) -> Result<(), String> {
                 return;
             }
             if let Some(provider_id) = id.strip_prefix("provider:") {
-                let state = app.state::<AppState>();
-                if let Err(err) = apply_provider(app.clone(), state, provider_id.to_string()) {
-                    switch_log(&format!("tray apply_provider failed: {err}"));
-                }
+                let handle = app.clone();
+                let provider_id = provider_id.to_string();
+                tauri::async_runtime::spawn_blocking(move || {
+                    if let Err(err) =
+                        apply_provider(handle.clone(), handle.state::<AppState>(), provider_id)
+                    {
+                        *handle.state::<AppState>().error.lock().unwrap() = err;
+                    }
+                });
             }
         })
         .build(app)
@@ -1302,6 +1471,8 @@ pub fn run() {
         }))
         .plugin(tauri_plugin_opener::init())
         .manage(AppState {
+            operation: Mutex::new(()),
+            initializing: AtomicBool::new(true),
             runtime: Mutex::new(RuntimeState {
                 relay: None,
                 bridge: None,
@@ -1312,16 +1483,21 @@ pub fn run() {
         })
         .setup(|app| {
             let handle = app.handle().clone();
-            let state = handle.state::<AppState>();
-            let result = build_tray(&handle).and_then(|_| {
-                restart_active_backend(&handle, state.inner())?;
-                install_hook(state.inner())
+            build_tray(&handle)?;
+            tauri::async_runtime::spawn_blocking(move || {
+                let state = handle.state::<AppState>();
+                let _operation = state.operation.lock().unwrap();
+                let result = restart_active_backend(&handle, state.inner())
+                    .and_then(|_| install_hook(state.inner()));
+                #[cfg(target_os = "windows")]
+                let result = result.and_then(|_| maybe_open_or_restart_accio().map(|_| ()));
+                if let Err(err) = result {
+                    let _ = stop_backend(state.inner());
+                    switch_log(&format!("启动失败：{err}"));
+                    *state.error.lock().unwrap() = err;
+                }
+                state.initializing.store(false, Ordering::SeqCst);
             });
-            if let Err(err) = result {
-                let _ = stop_backend(state.inner());
-                switch_log(&format!("启动失败：{err}"));
-                *state.error.lock().unwrap() = err;
-            }
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -1344,6 +1520,7 @@ pub fn run() {
         .run(|app, event| {
             if let tauri::RunEvent::Exit = event {
                 let state = app.state::<AppState>();
+                let _operation = state.operation.lock().unwrap();
                 let hooked = *state.hook_installed.lock().unwrap() && accio_using_relay();
                 let _ = stop_backend(state.inner());
                 if !*state.hook_installed.lock().unwrap() {
@@ -1351,8 +1528,8 @@ pub fn run() {
                 }
                 launchctl_unset("GATEWAY_BASE_URL");
                 launchctl_unset("FAST_BUILD");
-                if hooked {
-                    let _ = restart_accio(app.state::<AppState>());
+                if hooked && quit_accio().is_ok() {
+                    let _ = open_accio();
                 }
             }
         });
@@ -1361,6 +1538,50 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn local_http_fixture(status: &str, body: &str) -> String {
+        let listener = std::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let response = format!(
+            "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        );
+        std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = [0_u8; 512];
+            let _ = stream.read(&mut request);
+            stream.write_all(response.as_bytes()).unwrap();
+        });
+        format!("http://127.0.0.1:{port}/healthz")
+    }
+
+    #[test]
+    fn local_health_check_uses_http_status_and_json_body() {
+        let ok = local_http_fixture("200 OK", r#"{"ok":true}"#);
+        assert_eq!(curl_json(&ok).unwrap()["ok"], true);
+
+        let failed = local_http_fixture("503 Service Unavailable", r#"{"ok":false}"#);
+        assert!(!http_ok(&failed));
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn node_paths_drop_windows_verbatim_prefix() {
+        assert_eq!(
+            node_compatible_path(Path::new(
+                r"\\?\C:\Users\Example User\Accio Switch\sidecar\gateway-relay.cjs"
+            )),
+            PathBuf::from(r"C:\Users\Example User\Accio Switch\sidecar\gateway-relay.cjs")
+        );
+        assert_eq!(
+            node_compatible_path(Path::new(r"\\?\UNC\server\share\gateway-relay.cjs")),
+            PathBuf::from(r"\\server\share\gateway-relay.cjs")
+        );
+        assert_eq!(
+            node_compatible_path(Path::new(r"C:\plain\gateway-relay.cjs")),
+            PathBuf::from(r"C:\plain\gateway-relay.cjs")
+        );
+    }
 
     #[test]
     fn legacy_config_defaults_image_channel() {
