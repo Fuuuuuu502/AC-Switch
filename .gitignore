@@ -24,3 +24,8 @@ src-tauri/target
 *.njsproj
 *.sln
 *.sw?
+
+# Downloaded, checksum-verified Node runtime
+src-tauri/runtime/
+.env
+.env.*

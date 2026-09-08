@@ -1,22 +1,28 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Accio Switch",
-  "version": "0.1.0",
+  "version": "0.1.3",
   "identifier": "com.fuuuuuu502.accio-switch",
   "build": {
     "beforeDevCommand": "pnpm dev",
     "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "pnpm build",
+    "beforeBuildCommand": "sh scripts/prepare-node.sh && pnpm build",
     "frontendDist": "../dist"
   },
   "app": {
     "windows": [
       {
         "title": "Accio Switch",
-        "width": 920,
-        "height": 680,
-        "minWidth": 760,
-        "minHeight": 520
+        "width": 960,
+        "height": 780,
+        "minWidth": 780,
+        "minHeight": 560,
+        "titleBarStyle": "Overlay",
+        "hiddenTitle": true,
+        "trafficLightPosition": {
+          "x": 16,
+          "y": 18
+        }
       }
     ],
     "security": {
@@ -25,14 +31,25 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["dmg", "app"],
-    "resources": ["../sidecar"],
+    "targets": [
+      "dmg",
+      "app"
+    ],
+    "resources": {
+      "../sidecar/": "sidecar/",
+      "runtime/": "runtime/"
+    },
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
-    ]
+    ],
+    "macOS": {
+      "signingIdentity": "-",
+      "hardenedRuntime": false,
+      "minimumSystemVersion": "13.5"
+    }
   }
 }

@@ -16,9 +16,30 @@ const LOCAL_GATEWAY_AUTH = LOCAL_GATEWAY_PASSWORD
   : "";
 const MAX_BODY_BYTES = 32 * 1024 * 1024;
 const LOG_PATH = process.env.ACCIO_RELAY_LOG || "";
-const MODEL_CACHE_PATH = path.join(os.homedir(), ".accio", "model_cache.json");
+const MODEL_CACHE_PATH = process.env.ACCIO_MODEL_CACHE_PATH || path.join(os.homedir(), ".accio", "model_cache.json");
 const MODEL_LABEL_SEPARATOR = " | Accio: ";
 const MODEL_CATALOG_TTL_SECONDS = 5;
+const ROUTE_MODE = (process.env.ACCIO_ROUTE_MODE || "custom").trim();
+const DEFAULT_MODEL_PATHS = [
+  "/api/adk/llm/generateContent",
+  "/api/adk/llm/streamGenerateContent",
+];
+const DEFAULT_IMAGE_PATHS = [
+  "/api/image/generate",
+  "/api/image/edit",
+  "/api/media/image/generate",
+  "/api/media/image/edit",
+];
+const MODEL_PATHS = parsePathList(process.env.ACCIO_MODEL_PATHS, DEFAULT_MODEL_PATHS);
+const IMAGE_PATHS = parsePathList(process.env.ACCIO_IMAGE_PATHS, DEFAULT_IMAGE_PATHS);
+
+function parsePathList(value, fallback) {
+  const items = String(value || "")
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
+  return items.length > 0 ? items : fallback;
+}
 
 function logRoute(message) {
   if (!LOG_PATH) return;
@@ -67,6 +88,27 @@ function isLocalRuntimeRequest(pathname) {
   );
 }
 
+function isModelPath(pathname) {
+  if (MODEL_PATHS.includes(pathname)) return true;
+  if (pathname === "/api/adk/llm" || pathname.startsWith("/api/adk/llm/")) {
+    return /generateContent|streamGenerateContent/i.test(pathname);
+  }
+  return false;
+}
+
+function isImagePath(pathname) {
+  return IMAGE_PATHS.includes(pathname);
+}
+
+function isImageGenerationPayload(payload) {
+  const generationConfig = payload?.generationConfig ?? payload?.generation_config;
+  const responseModalities = generationConfig?.responseModalities ?? generationConfig?.response_modalities;
+  return (
+    Array.isArray(responseModalities) &&
+    responseModalities.some((modality) => String(modality).trim().toUpperCase() === "IMAGE")
+  );
+}
+
 function stripActualModelLabel(value) {
   const text = typeof value === "string" ? value.trim() : "";
   const separatorIndex = text.indexOf(MODEL_LABEL_SEPARATOR);
@@ -99,8 +141,10 @@ function applyActualModelLabel(snapshot, status) {
       : status.model.trim();
   const provider = providerDisplayName(status.provider);
   const reasoningEffort = typeof status.reasoningEffort === "string" ? status.reasoningEffort.trim() : "";
+  const protocol = typeof status.protocol === "string" ? status.protocol.trim() : "";
   const modelLabel = provider ? `${provider} · ${model}` : model;
-  const actualLabel = reasoningEffort ? `${modelLabel} · ${reasoningEffort}` : modelLabel;
+  const withEffort = reasoningEffort ? `${modelLabel} · ${reasoningEffort}` : modelLabel;
+  const actualLabel = protocol && protocol !== "chat_completions" ? `${withEffort} · ${protocol}` : withEffort;
   const decoratedModelCodes = new Set();
   for (const itemProvider of snapshot.data) {
     if (!Array.isArray(itemProvider.modelList)) continue;
@@ -138,7 +182,6 @@ function readCachedModelCatalog(request) {
 }
 
 async function serveModelCatalog(request, response) {
-  await readBody(request);
   const snapshot = readCachedModelCatalog(request);
   const status = await getActualModelStatus();
   const catalog = applyActualModelLabel(snapshot, status);
@@ -190,25 +233,47 @@ const server = http.createServer(async (request, response) => {
       response.end(
         JSON.stringify({
           ok: true,
+          routeMode: ROUTE_MODE,
           modelBridge: MODEL_BRIDGE,
           originalGateway: ORIGINAL_GATEWAY,
+          modelPaths: MODEL_PATHS,
+          imagePaths: IMAGE_PATHS,
         }),
       );
       return;
     }
     const pathname = new URL(request.url || "/", `http://${HOST}:${PORT}`).pathname;
     if (request.method === "POST" && pathname === "/api/llm/config/v2") {
+      if (ROUTE_MODE === "official") {
+        await forward(request, response, ORIGINAL_GATEWAY);
+        return;
+      }
+      const catalogBody = await readBody(request);
       try {
         await serveModelCatalog(request, response);
       } catch (error) {
         logRoute(`catalog fallback ${error?.message || String(error)}`);
-        await forward(request, response, ORIGINAL_GATEWAY);
+        await forward(request, response, ORIGINAL_GATEWAY, catalogBody);
       }
       return;
     }
-    const isModelRequest = request.method === "POST" && pathname === "/api/adk/llm/generateContent";
-    if (isModelRequest) {
+    const modelRequest = request.method === "POST" && isModelPath(pathname);
+    const imageHttpRequest = request.method === "POST" && isImagePath(pathname);
+    if (ROUTE_MODE === "official") {
+      await forward(request, response, isLocalRuntimeRequest(pathname) ? LOCAL_GATEWAY : ORIGINAL_GATEWAY);
+      return;
+    }
+    if (modelRequest || imageHttpRequest) {
       const modelBody = await readBody(request);
+      let imageGenerationRequest = imageHttpRequest;
+      if (modelRequest) {
+        try {
+          imageGenerationRequest = isImageGenerationPayload(JSON.parse(modelBody.toString("utf8")));
+        } catch {}
+      }
+      logRoute(
+        `model ${request.method} ${pathname} image=${imageGenerationRequest} -> ${MODEL_BRIDGE}`,
+      );
       await forward(request, response, MODEL_BRIDGE, modelBody);
       return;
     }
@@ -216,6 +281,7 @@ const server = http.createServer(async (request, response) => {
     await forward(request, response, target);
   } catch (error) {
     if (!response.writableEnded) {
+      if (response.headersSent) { response.destroy(error); return; }
       response.writeHead(502, { "Content-Type": "application/json" });
       response.end(JSON.stringify({ error: "ACCIO_RELAY", message: error?.message || String(error) }));
     }
@@ -223,7 +289,7 @@ const server = http.createServer(async (request, response) => {
 });
 
 server.listen(PORT, HOST, () => {
-  console.log(`Accio gateway relay listening on http://${HOST}:${PORT}`);
+  console.log(`Accio gateway relay listening on http://${HOST}:${server.address().port} mode=${ROUTE_MODE}`);
 });
 
 for (const signal of ["SIGINT", "SIGTERM"]) {

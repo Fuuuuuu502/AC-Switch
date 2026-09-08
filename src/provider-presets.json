@@ -1,0 +1,8 @@
+[
+  {"id":"opencode","name":"OpenCode Go","kind":"opencode_go","endpoint":"https://opencode.ai/zen/go/v1/chat/completions","models":["deepseek-v4-flash","deepseek-v4-pro"],"reasoningEffort":"high","efforts":["disabled","low","high","max"],"note":"使用 OpenCode Go 订阅的 API Key。"},
+  {"id":"openai","name":"OpenAI","kind":"custom_openai","endpoint":"https://api.openai.com/v1/chat/completions","models":["gpt-4.1-mini","gpt-4.1"],"reasoningEffort":"disabled","efforts":["disabled"],"note":"使用 OpenAI API Key；ChatGPT 订阅不包含 API 额度。"},
+  {"id":"deepseek","name":"DeepSeek","kind":"custom_openai","endpoint":"https://api.deepseek.com/chat/completions","models":["deepseek-v4-flash","deepseek-v4-pro"],"reasoningEffort":"high","efforts":["disabled","low","high","max"],"note":"使用 DeepSeek 开放平台 API Key。"},
+  {"id":"qwen","name":"通义千问 · 北京","kind":"custom_openai","endpoint":"https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions","models":["qwen3.8-max"],"reasoningEffort":"disabled","efforts":["disabled","high"],"note":"使用阿里云百炼中国内地（北京）API Key。"},
+  {"id":"zhipu","name":"智谱 · 通用 API","kind":"custom_openai","endpoint":"https://open.bigmodel.cn/api/paas/v4/chat/completions","models":["glm-5.3"],"reasoningEffort":"high","efforts":["disabled","high"],"note":"使用智谱通用 API Key，此接口不适用于 Coding Plan。"},
+  {"id":"kimi","name":"Moonshot / Kimi","kind":"custom_openai","endpoint":"https://api.moonshot.cn/v1/chat/completions","models":["kimi-k3"],"reasoningEffort":"high","efforts":["low","high","max"],"note":"使用 Moonshot 开放平台 API Key；K3 始终开启思考。"}
+]
