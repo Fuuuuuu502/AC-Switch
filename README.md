@@ -79,3 +79,28 @@ node --test tests/presets.test.cjs tests/provider-endpoint.test.mjs
 桌面验收专用环境：设置 `ACCIO_SWITCH_TEST_DIR` 为独立绝对目录，并同时设置 `ACCIO_SWITCH_TEST_RELAY_PORT`、`ACCIO_SWITCH_TEST_BRIDGE_PORT`。此模式不访问钥匙串、OpenCode 凭据、Accio asar，不修改 launchctl 或启动/重启 Accio；通过 `ACCIO_ORIGINAL_GATEWAY_URL`、`ACCIO_LOCAL_GATEWAY_URL` 和测试供应商配置指向本地模拟服务。正常使用不要设置这些变量。
 
 Windows、Intel、自启、自动更新及签名公证留待后续；新图标已完成。
+
+## Windows x64 开发与验收（尚未发布）
+
+Windows 适配源代码已加入，安装包必须在 Windows 上构建。当前尚未通过 Windows 编译及真实 Accio 验收，已发布 Mac 0.1.3 不代表 Windows 可用。
+
+- 系统目标：Windows 11 x64（首轮验收），先安装 Windows Accio。
+- 内置 Node v24.20.0 win-x64，由 `scripts/prepare-node.ps1` 固定 SHA-256 校验并附带许可；Tauri 自动合并 `tauri.windows.conf.json`，生成当前用户 NSIS 安装程序。
+- 凭据使用当前 Windows 用户的 DPAPI 加密，不能直接复制 Mac 的 Key 文件。首次使用请重新填写 Key。
+- 检查常见安装目录与卸载注册表的 InstallLocation；自定义路径可用 `ACCIO_SWITCH_ACCIO_PATH` 指向 `Accio.exe`。
+- 网关变量只传给 Switch 启动的 Accio，不设置全局环境变量。Accio 已运行但未连接中继时尝试正常关闭；无法退出会提示手动退出，不强杀。
+- Windows 不清理未知或孤儿监听进程；端口冲突提示用户退出旧实例。关闭 Switch 窗口仍保留托盘。
+- 未进行 Windows 代码签名，分发前需说明 SmartScreen 提示；不应关闭系统安全防护。
+
+仓库工作流 **Windows x64 build** 仅支持手动触发（Actions → Run workflow），运行 Rust 测试、DPAPI 加解密测试、Node 本地协议测试并生成 `Accio-Switch-Windows-x64` artifact。不会自动发布 Release。私有仓库 Actions 的可用额度以账号为准。
+
+本机 Windows 构建需要 Node 24、pnpm 10、Rust stable MSVC、Visual Studio C++ Build Tools 和 WebView2；普通使用者安装打包后的程序即可，无需这些开发工具。
+
+```powershell
+pnpm install --frozen-lockfile
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/prepare-node.ps1
+cargo test --manifest-path src-tauri/Cargo.toml -- --test-threads=1
+pnpm tauri build
+```
+
+拿到安装包后，先用临时配置/虚构 Key 验证启动、保存、端口冲突和退出；真实模型验收由用户使用自己的 Key 进行，先验证 DeepSeek 普通文字回复。特别确认 Windows Accio 会读取子进程环境中的 GATEWAY_BASE_URL；未经实测不认定该路径可用。图片仍暂缓。

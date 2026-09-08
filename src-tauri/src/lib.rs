@@ -12,6 +12,22 @@ use tauri::{
     AppHandle, Manager, State,
 };
 use uuid::Uuid;
+#[cfg(any(target_os = "windows", test))]
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+mod windows;
+#[cfg(target_os = "windows")]
+use windows::{accio_running, quit_accio, open_accio, install_hook, launchctl_unset, accio_using_relay, clear_owned_orphans, file_set, file_get, keychain_set, keychain_get, keychain_delete};
+
+fn command(program: impl AsRef<std::ffi::OsStr>) -> Command {
+    #[allow(unused_mut)]
+    let mut cmd = Command::new(program);
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW for background helpers.
+    }
+    cmd
+}
 
 fn isolated() -> bool {
     std::env::var_os("ACCIO_SWITCH_TEST_DIR").is_some()
@@ -39,7 +55,9 @@ fn relay_url() -> String {
 fn bridge_url() -> String {
     format!("http://127.0.0.1:{}", bridge_port())
 }
+#[cfg(not(target_os = "windows"))]
 const ACCIO_APP: &str = "/Applications/Accio.app";
+#[cfg(not(target_os = "windows"))]
 const KEYCHAIN_SERVICE: &str = "accio-switch";
 const IMAGE_ACCOUNT: &str = "image-channel";
 
@@ -214,6 +232,7 @@ fn key_file(account: &str) -> Result<PathBuf, String> {
     Ok(keys_dir()?.join(account))
 }
 
+#[cfg(not(target_os = "windows"))]
 fn file_set(account: &str, secret: &str) -> Result<(), String> {
     let path = key_file(account)?;
     fs::write(&path, secret.as_bytes()).map_err(|e| e.to_string())?;
@@ -221,6 +240,7 @@ fn file_set(account: &str, secret: &str) -> Result<(), String> {
     Ok(())
 }
 
+#[cfg(not(target_os = "windows"))]
 fn file_get(account: &str) -> Result<Option<String>, String> {
     let path = key_file(account)?;
     if !path.exists() {
@@ -241,11 +261,12 @@ fn file_delete(account: &str) {
     }
 }
 
+#[cfg(not(target_os = "windows"))]
 fn keychain_set(account: &str, secret: &str) -> Result<(), String> {
     if isolated() {
         return Ok(());
     }
-    let status = Command::new("security")
+    let status = command("security")
         .args([
             "add-generic-password",
             "-U",
@@ -265,11 +286,12 @@ fn keychain_set(account: &str, secret: &str) -> Result<(), String> {
     }
 }
 
+#[cfg(not(target_os = "windows"))]
 fn keychain_get(account: &str) -> Result<Option<String>, String> {
     if isolated() {
         return Ok(None);
     }
-    let output = Command::new("security")
+    let output = command("security")
         .args([
             "find-generic-password",
             "-s",
@@ -297,11 +319,12 @@ fn keychain_get(account: &str) -> Result<Option<String>, String> {
     }
 }
 
+#[cfg(not(target_os = "windows"))]
 fn keychain_delete(account: &str) {
     if isolated() {
         return;
     }
-    let _ = Command::new("security")
+    let _ = command("security")
         .args([
             "delete-generic-password",
             "-s",
@@ -408,7 +431,7 @@ fn node_bin(app: &AppHandle) -> Result<PathBuf, String> {
             .path()
             .resource_dir()
             .map_err(|e| e.to_string())?
-            .join("runtime/node");
+            .join(if cfg!(target_os = "windows") { "runtime/node.exe" } else { "runtime/node" });
         if !path.is_file() {
             return Err(format!("内置 Node 缺失，请重新安装：{}", path.display()));
         }
@@ -426,7 +449,7 @@ fn node_bin(app: &AppHandle) -> Result<PathBuf, String> {
 }
 
 fn http_ok(url: &str) -> bool {
-    Command::new("curl")
+    command("curl")
         .args(["-fsS", "--max-time", "1", url])
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -435,11 +458,12 @@ fn http_ok(url: &str) -> bool {
         .unwrap_or(false)
 }
 
+#[cfg(not(target_os = "windows"))]
 fn accio_running() -> bool {
     if isolated() {
         return false;
     }
-    Command::new("pgrep")
+    command("pgrep")
         .args(["-x", "Accio"])
         .stdout(Stdio::null())
         .status()
@@ -447,21 +471,24 @@ fn accio_running() -> bool {
         .unwrap_or(false)
 }
 
-fn quit_accio() {
+#[cfg(not(target_os = "windows"))]
+fn quit_accio() -> Result<(), String> {
     if isolated() {
-        return;
+        return Ok(());
     }
-    let _ = Command::new("osascript")
+    let _ = command("osascript")
         .args(["-e", "quit app \"Accio\""])
         .status();
     std::thread::sleep(Duration::from_millis(1200));
+    Ok(())
 }
 
+#[cfg(not(target_os = "windows"))]
 fn launchctl_set(key: &str, value: &str) -> Result<(), String> {
     if isolated() {
         return Ok(());
     }
-    Command::new("launchctl")
+    command("launchctl")
         .args(["setenv", key, value])
         .status()
         .map_err(|e| e.to_string())
@@ -474,11 +501,12 @@ fn launchctl_set(key: &str, value: &str) -> Result<(), String> {
         })
 }
 
+#[cfg(not(target_os = "windows"))]
 fn install_hook(state: &AppState) -> Result<(), String> {
     let previous = if isolated() {
         None
     } else {
-        Command::new("launchctl")
+        command("launchctl")
             .args(["getenv", "GATEWAY_BASE_URL"])
             .output()
             .ok()
@@ -498,13 +526,15 @@ fn install_hook(state: &AppState) -> Result<(), String> {
     Ok(())
 }
 
+#[cfg(not(target_os = "windows"))]
 fn launchctl_unset(key: &str) {
     if isolated() {
         return;
     }
-    let _ = Command::new("launchctl").args(["unsetenv", key]).status();
+    let _ = command("launchctl").args(["unsetenv", key]).status();
 }
 
+#[cfg(not(target_os = "windows"))]
 fn open_accio() -> Result<(), String> {
     if isolated() {
         return Ok(());
@@ -512,7 +542,7 @@ fn open_accio() -> Result<(), String> {
     if !Path::new(ACCIO_APP).exists() {
         return Err("未找到 /Applications/Accio.app".into());
     }
-    Command::new("open")
+    command("open")
         .arg(ACCIO_APP)
         .status()
         .map_err(|e| e.to_string())
@@ -537,7 +567,7 @@ fn spawn_node(
         .open(log_path)
         .map_err(|e| e.to_string())?;
     let err = log.try_clone().map_err(|e| e.to_string())?;
-    let mut cmd = Command::new(node);
+    let mut cmd = command(node);
     cmd.env_remove("NODE_OPTIONS").env_remove("NODE_PATH");
     cmd.arg(script)
         .stdin(Stdio::null())
@@ -550,8 +580,9 @@ fn spawn_node(
         .map_err(|e| format!("failed to start {}: {e}", script.display()))
 }
 
+#[cfg(not(target_os = "windows"))]
 fn listen_pids(port: u16) -> Vec<String> {
-    let output = Command::new("lsof")
+    let output = command("lsof")
         .args(["-nP", &format!("-iTCP:{port}"), "-sTCP:LISTEN", "-t"])
         .output();
     match output {
@@ -565,15 +596,16 @@ fn listen_pids(port: u16) -> Vec<String> {
 }
 
 // Never kill a process merely because it owns one of our ports.
+#[cfg(not(target_os = "windows"))]
 fn clear_owned_orphans(port: u16, node: &Path, script: &Path) -> Result<(), String> {
     for pid in listen_pids(port) {
-        let out = Command::new("ps")
+        let out = command("ps")
             .args(["-p", &pid, "-o", "ppid=,command="])
             .output()
             .map_err(|e| e.to_string())?;
-        let command = String::from_utf8_lossy(&out.stdout);
+        let process_command = String::from_utf8_lossy(&out.stdout);
         let expected = format!("{} {}", node.display(), script.display());
-        let owned = command
+        let owned = process_command
             .trim()
             .strip_prefix('1')
             .is_some_and(|rest| rest.starts_with(char::is_whitespace) && rest.trim() == expected);
@@ -582,7 +614,7 @@ fn clear_owned_orphans(port: u16, node: &Path, script: &Path) -> Result<(), Stri
                 "端口 {port} 被其他进程（PID {pid}）占用，请先关闭该服务。"
             ));
         }
-        Command::new("kill")
+        command("kill")
             .args(["-TERM", &pid])
             .status()
             .map_err(|e| e.to_string())?;
@@ -614,11 +646,12 @@ fn wait_health(url: &str) -> Result<(), String> {
     Err(format!("timed out waiting for {url}"))
 }
 
+#[cfg(not(target_os = "windows"))]
 fn accio_using_relay() -> bool {
     if isolated() {
         return false;
     }
-    let output = Command::new("lsof")
+    let output = command("lsof")
         .args(["-nP", "-iTCP:18767", "-sTCP:ESTABLISHED"])
         .output();
     match output {
@@ -643,8 +676,14 @@ fn detect_accio_paths() -> (String, String) {
     if isolated() {
         return (default_model.join(","), default_image.join(","));
     }
-    let asar = Path::new("/Applications/Accio.app/Contents/Resources/app.asar");
-    let asar_len = fs::metadata(asar).map(|meta| meta.len()).unwrap_or(0);
+    #[cfg(not(target_os = "windows"))]
+    let asar = PathBuf::from("/Applications/Accio.app/Contents/Resources/app.asar");
+    #[cfg(target_os = "windows")]
+    let asar = match windows::accio_exe().ok().and_then(|exe| exe.parent().map(|dir| dir.join("resources/app.asar"))) {
+        Some(path) => path,
+        None => return (default_model.join(","), default_image.join(",")),
+    };
+    let asar_len = fs::metadata(&asar).map(|meta| meta.len()).unwrap_or(0);
     if let Ok(dir) = config_dir() {
         let cache_path = dir.join("detected-paths.json");
         if let Ok(raw) = fs::read_to_string(&cache_path) {
@@ -672,7 +711,7 @@ fn detect_accio_paths() -> (String, String) {
     }
     let mut model = default_model;
     let mut image = default_image;
-    if let Ok(data) = fs::read(asar) {
+    if let Ok(data) = fs::read(&asar) {
         let text = String::from_utf8_lossy(&data);
         for extra in [
             "/api/adk/llm/generate",
@@ -716,7 +755,7 @@ fn maybe_open_or_restart_accio() -> Result<bool, String> {
     if accio_using_relay() {
         return Ok(false);
     }
-    quit_accio();
+    quit_accio()?;
     open_accio()?;
     Ok(true)
 }
@@ -1066,7 +1105,7 @@ fn delete_provider(
 }
 
 fn curl_json(url: &str) -> Option<serde_json::Value> {
-    let output = Command::new("curl")
+    let output = command("curl")
         .args(["-fsS", "--max-time", "1", url])
         .output()
         .ok()?;
@@ -1150,7 +1189,7 @@ fn apply_provider(app: AppHandle, state: State<AppState>, id: String) -> Result<
 
 #[tauri::command]
 fn restart_accio(state: State<AppState>) -> Result<AppStatus, String> {
-    quit_accio();
+    quit_accio()?;
     open_accio()?;
     get_status(state)
 }
@@ -1350,13 +1389,14 @@ mod tests {
         assert!(std::net::TcpStream::connect(("127.0.0.1", port)).is_ok());
     }
 
+    #[cfg(unix)]
     #[test]
     fn owned_child_is_reaped() {
-        let mut child = Some(Command::new("/bin/sleep").arg("30").spawn().unwrap());
+        let mut child = Some(command("/bin/sleep").arg("30").spawn().unwrap());
         let pid = child.as_ref().unwrap().id();
         stop_child(&mut child);
         assert!(child.is_none());
-        assert!(!Command::new("/bin/kill")
+        assert!(!command("/bin/kill")
             .args(["-0", &pid.to_string()])
             .stderr(Stdio::null())
             .status()

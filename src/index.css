@@ -174,3 +174,5 @@ h1 { font-size: 25px; line-height: 1.4; font-weight: 600; letter-spacing: 0; mar
 .advanced-settings summary { cursor: pointer; color: #b4c9bc; font-size: 12px; padding: 8px 0; }
 .advanced-settings summary:focus-visible { outline: 2px solid #f2fff8; outline-offset: 3px; }
 .advanced-fields { display: grid; gap: 16px; padding-top: 12px; }
+
+.platform-windows .titlebar { padding-left: 22px; }
