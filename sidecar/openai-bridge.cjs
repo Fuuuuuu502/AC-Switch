@@ -32,7 +32,9 @@ if (!["opencode_go", "volcengine_coding_plan", "custom_openai"].includes(API_PRO
 }
 const supportedReasoningModes = API_PROVIDER === "volcengine_coding_plan"
   ? volcengineReasoningModesByModel.get(MODEL.toLowerCase()) || ["default"]
-  : ["disabled", "low", "high", "max"];
+  : API_PROVIDER === "custom_openai"
+    ? ["disabled", "low", "medium", "high", "xhigh", "max"]
+    : ["disabled", "low", "high", "max"];
 if (!supportedReasoningModes.includes(REASONING_MODE)) {
   throw new Error(`Unsupported reasoning mode: ${REASONING_MODE}`);
 }
@@ -470,7 +472,7 @@ function toResponsesRequest(payload) {
     stream: true,
     store: false,
   };
-  if (REASONING_MODE !== "disabled") request.reasoning = { effort: REASONING_MODE === "max" ? "high" : REASONING_MODE };
+  if (REASONING_MODE !== "disabled") request.reasoning = { effort: REASONING_MODE };
   if (tools.length > 0) request.tools = tools;
   return request;
 }

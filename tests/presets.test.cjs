@@ -21,6 +21,11 @@ test('unknown custom endpoints retain legacy reasoning; hostname lookalikes are 
   assert.deepEqual(reasoningOptions('http://localhost:1234/v1/chat/completions', 'local', 'disabled'), expected);
   assert.deepEqual(reasoningOptions('https://api.openai.com.example.org/v1/chat/completions', 'local', 'disabled'), expected);
 });
+test('OpenAI reasoning effort is preserved without silently lowering max', () => {
+  for (const effort of ['low', 'medium', 'high', 'xhigh', 'max']) {
+    assert.deepEqual(reasoningOptions('https://api.openai.com/v1/chat/completions', 'gpt-6-astra', effort), { reasoning_effort: effort });
+  }
+});
 test('Qwen and GLM enable reasoning without unsupported effort; K3 never sends thinking', () => {
   assert.deepEqual(reasoningOptions(presets[3].endpoint, 'qwen3.8-max', 'high'), { enable_thinking: true });
   assert.deepEqual(reasoningOptions(presets[4].endpoint, 'glm-5.3', 'disabled'), { thinking: { type: 'disabled' } });

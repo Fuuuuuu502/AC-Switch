@@ -4,7 +4,11 @@ Mac 桌面应用：给 Accio Desktop 切换 OpenCode Go / 自定义 OpenAI 兼�
 
 界面仿 CC Switch 的供应商卡片与一键启用，不是 CC Switch 的 fork。当前状态与后续边界见 [任务交接.md](任务交接.md)，版本记录见 [CHANGELOG.md](CHANGELOG.md)。
 
-## 当前状态：0.1.3
+## 当前状态：0.1.4
+
+自定义 API 新增中（`medium`）和极高（`xhigh`）思考强度，标签简化为关闭、低、中、高、极高、最强。OpenAI Chat Completions 与 Responses 原样传递所选强度，不再将 `max` 降为 `high`；实际支持由模型和代理决定。Responses 下关闭选项仅省略强度参数，可能使用模型默认值，不保证关闭思考。
+
+启动、状态检查与供应商操作移至后台执行；状态轮询等待上次完成后再继续，避免请求堆积。
 
 用户已在真实 Accio App 中验证：DeepSeek 预设填写 Key、保留 Chat Completions，可以正常收到文字回复。图片功能暂缓，保留已有实现，不进行真实生图验收。其他供应商、真实 Responses、完整工具任务及超长研究尚未全面验收。
 

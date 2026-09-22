@@ -42,6 +42,46 @@ function frames(text) { return text.split('\n').filter(l => l.startsWith('data:'
 function event(res, type, data) { res.write(`event: ${type}\ndata: ${JSON.stringify({ type, ...data })}\n\n`); }
 function chat(res, delta, finish = null) { res.write(`data: ${JSON.stringify({ id: 'mock', choices: [{ delta, finish_reason: finish }] })}\n\n`); }
 
+for (const protocol of ['chat_completions', 'responses']) {
+  for (const effort of ['medium', 'xhigh', 'max']) {
+    test(`${protocol} preserves custom reasoning effort ${effort}`, async t => {
+      let input;
+      let route;
+      const upstream = await server(t, async (req, res) => {
+        route = req.url;
+        input = JSON.parse(await body(req));
+        res.setHeader('Content-Type', 'text/event-stream');
+        if (protocol === 'responses') {
+          event(res, 'response.output_text.delta', { delta: 'hello' });
+          event(res, 'response.completed', { response: { status: 'completed' } });
+          res.end();
+        } else {
+          chat(res, { content: 'hello' }, 'stop');
+          res.end('data: [DONE]\n\n');
+        }
+      });
+      const url = await bridge(t, upstream, {
+        ACCIO_API_PROTOCOL: protocol,
+        OPENCODE_GO_MODEL: 'gpt-6-astra',
+        OPENCODE_GO_REASONING_EFFORT: effort,
+      });
+      const result = frames(await post(url));
+      assert.equal(route, protocol === 'responses' ? '/v1/responses' : '/v1/chat/completions');
+      assert.equal(input.model, 'gpt-6-astra');
+      if (protocol === 'responses') {
+        assert.deepEqual(input.reasoning, { effort });
+        assert.equal(input.reasoning_effort, undefined);
+      } else {
+        assert.equal(input.reasoning_effort, effort);
+        assert.equal(input.reasoning, undefined);
+      }
+      assert.ok(result.some(frame => frame.content?.parts?.some(part => part.text === 'hello')));
+      assert.equal(result.at(-1).turnComplete, true);
+      assert.ok(result.every(frame => !frame.errorCode));
+    });
+  }
+}
+
 test('Chat text, reasoning and assembled tool arguments', async t => {
   let input;
   const upstream = await server(t, async (req, res) => {

@@ -4,7 +4,7 @@ function reasoningOptions(endpoint, model, effort) {
   const host = new URL(endpoint).hostname;
   const enabled = effort !== 'disabled';
   if (host === 'api.openai.com') {
-    return enabled ? { reasoning_effort: effort === 'max' ? 'high' : effort } : {};
+    return enabled ? { reasoning_effort: effort } : {};
   }
   if (host === 'dashscope.aliyuncs.com' || host === 'dashscope-intl.aliyuncs.com' || host.endsWith('.maas.aliyuncs.com')) {
     return { enable_thinking: enabled };

@@ -81,10 +81,12 @@ const KIND_LABEL: Record<string, string> = {
 };
 
 const EFFORT_LABEL: Record<string, string> = {
-  disabled: "关闭思考",
-  low: "低强度思考",
-  high: "高强度思考",
-  max: "最强思考",
+  disabled: "关闭",
+  low: "低",
+  medium: "中",
+  high: "高",
+  xhigh: "极高",
+  max: "最强",
   "-": "官方默认",
 };
 
@@ -370,7 +372,7 @@ export default function App() {
             <details className="advanced-settings" open={editingPreset ? undefined : true}><summary>高级设置 · 接口、模型与协议</summary><div className="advanced-fields">
             <Field label="供应商名称"><TextField required value={editing.name} onChange={(e) => setEditing({ ...editing, name: e.target.value })} /></Field>
             <Field label="完整请求地址"><TextField required value={editing.endpoint} spellCheck={false} onChange={(e) => setEditing({ ...editing, endpoint: e.target.value })} /><span className="field-help">填写实际接收请求的完整 URL，不是官网或 SDK 基础地址。{editing.apiProtocol === "responses" ? "通常以 /responses 结尾。" : "通常以 /chat/completions 结尾。"}</span></Field>
-            <div className="form-columns"><Field label="模型名称"><TextField required value={editing.model} onChange={(e) => setEditing({ ...editing, model: e.target.value })} /></Field><Field label="思考强度"><div className="select-wrap"><select value={editing.reasoningEffort} onChange={(e) => setEditing({ ...editing, reasoningEffort: e.target.value })}>{Array.from(new Set([...(editingPreset?.efforts || ["disabled", "low", "high", "max"]), editing.reasoningEffort])).map(item => <option key={item} value={item}>{EFFORT_LABEL[item]}</option>)}</select><ChevronDown size={14} /></div></Field></div>
+            <div className="form-columns"><Field label="模型名称"><TextField required value={editing.model} onChange={(e) => setEditing({ ...editing, model: e.target.value })} /></Field><Field label="思考强度"><div className="select-wrap"><select value={editing.reasoningEffort} onChange={(e) => setEditing({ ...editing, reasoningEffort: e.target.value })}>{Array.from(new Set([...(editingPreset?.efforts || ["disabled", "low", "medium", "high", "xhigh", "max"]), editing.reasoningEffort])).map(item => <option key={item} value={item}>{EFFORT_LABEL[item] || item}</option>)}</select><ChevronDown size={14} /></div><span className="field-help">可用强度取决于模型和代理支持；极高、最强通常需要更长时间和更多额度。</span></Field></div>
             <Field label="对话协议"><div className="select-wrap"><select value={editing.apiProtocol || "chat_completions"} onChange={(e) => { setError(""); setEditing({ ...editing, apiProtocol: e.target.value, endpoint: endpointForProtocol(editing.endpoint, e.target.value) }); }}><option value="chat_completions">Chat Completions</option><option value="responses">Responses API</option></select><ChevronDown size={14} /></div><span className="field-help">切换协议会同步替换标准接口路径；自定义路径需自行核对。当前不支持 Anthropic Messages（/anthropic）。</span></Field>
             </div></details>
             <div className="form-note"><Info size={14} />保存当前供应商后，模型与思考设置会立即应用。</div>
