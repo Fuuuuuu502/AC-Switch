@@ -4,7 +4,9 @@ Mac 桌面应用：给 Accio Desktop 切换 OpenCode Go / 自定义 OpenAI 兼�
 
 界面仿 CC Switch 的供应商卡片与一键启用，不是 CC Switch 的 fork。当前状态与后续边界见 [任务交接.md](任务交接.md)，版本记录见 [CHANGELOG.md](CHANGELOG.md)。
 
-## 当前状态：0.1.4
+## 当前状态：0.1.5
+
+修复 Accio gzip 压缩请求被当作 JSON 解析的问题。网关转发保留压缩头与原始数据，模型桥解压后转换请求；压缩前后的请求大小均限制为 32 MiB。
 
 自定义 API 新增中（`medium`）和极高（`xhigh`）思考强度，标签简化为关闭、低、中、高、极高、最强。OpenAI Chat Completions 与 Responses 原样传递所选强度，不再将 `max` 降为 `high`；实际支持由模型和代理决定。Responses 下关闭选项仅省略强度参数，可能使用模型默认值，不保证关闭思考。
 

@@ -100,15 +100,6 @@ function isImagePath(pathname) {
   return IMAGE_PATHS.includes(pathname);
 }
 
-function isImageGenerationPayload(payload) {
-  const generationConfig = payload?.generationConfig ?? payload?.generation_config;
-  const responseModalities = generationConfig?.responseModalities ?? generationConfig?.response_modalities;
-  return (
-    Array.isArray(responseModalities) &&
-    responseModalities.some((modality) => String(modality).trim().toUpperCase() === "IMAGE")
-  );
-}
-
 function stripActualModelLabel(value) {
   const text = typeof value === "string" ? value.trim() : "";
   const separatorIndex = text.indexOf(MODEL_LABEL_SEPARATOR);
@@ -199,7 +190,7 @@ async function forward(request, response, baseUrl, bodyOverride) {
   logRoute(`forward ${request.method} ${incomingUrl.pathname} -> ${baseUrl}`);
   const headers = {};
   for (const [name, value] of Object.entries(request.headers)) {
-    if (["accept-encoding", "connection", "content-encoding", "content-length", "host", "transfer-encoding"].includes(name)) continue;
+    if (["accept-encoding", "connection", "content-length", "host", "transfer-encoding"].includes(name)) continue;
     if (value !== undefined) headers[name] = Array.isArray(value) ? value.join(", ") : value;
   }
   if (baseUrl === LOCAL_GATEWAY && LOCAL_GATEWAY_AUTH) headers.authorization = LOCAL_GATEWAY_AUTH;
@@ -264,17 +255,8 @@ const server = http.createServer(async (request, response) => {
       return;
     }
     if (modelRequest || imageHttpRequest) {
-      const modelBody = await readBody(request);
-      let imageGenerationRequest = imageHttpRequest;
-      if (modelRequest) {
-        try {
-          imageGenerationRequest = isImageGenerationPayload(JSON.parse(modelBody.toString("utf8")));
-        } catch {}
-      }
-      logRoute(
-        `model ${request.method} ${pathname} image=${imageGenerationRequest} -> ${MODEL_BRIDGE}`,
-      );
-      await forward(request, response, MODEL_BRIDGE, modelBody);
+      logRoute(`model ${request.method} ${pathname} -> ${MODEL_BRIDGE}`);
+      await forward(request, response, MODEL_BRIDGE);
       return;
     }
     const target = isLocalRuntimeRequest(pathname) ? LOCAL_GATEWAY : ORIGINAL_GATEWAY;

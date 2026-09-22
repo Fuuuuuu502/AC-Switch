@@ -6,6 +6,7 @@ const { once } = require('node:events');
 const { mkdtemp, rm } = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
+const { gzipSync } = require('node:zlib');
 const node = process.env.TEST_NODE || process.execPath;
 const llm = '/api/adk/llm/generateContent';
 const payload = { contents: [{ role: 'user', parts: [{ text: 'test' }] }] };
@@ -41,6 +42,78 @@ async function post(url, data = payload, route = llm) {
 function frames(text) { return text.split('\n').filter(l => l.startsWith('data:')).map(l => JSON.parse(l.slice(5))); }
 function event(res, type, data) { res.write(`event: ${type}\ndata: ${JSON.stringify({ type, ...data })}\n\n`); }
 function chat(res, delta, finish = null) { res.write(`data: ${JSON.stringify({ id: 'mock', choices: [{ delta, finish_reason: finish }] })}\n\n`); }
+
+async function postGzip(url, data = payload, route = llm) {
+  const response = await fetch(url + route, { method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Content-Encoding': 'gzip' },
+    body: gzipSync(JSON.stringify(data)), signal: AbortSignal.timeout(10000) });
+  return response.text();
+}
+
+for (const protocol of ['chat_completions', 'responses']) {
+  test(`${protocol} decodes gzip directly and through relay`, async t => {
+    const inputs = [];
+    const upstream = await server(t, async (req, res) => {
+      inputs.push(JSON.parse(await body(req)));
+      assert.equal(req.headers['content-encoding'], undefined);
+      res.setHeader('Content-Type', 'text/event-stream');
+      if (protocol === 'responses') {
+        event(res, 'response.output_text.delta', { delta: 'hello' });
+        event(res, 'response.completed', { response: { status: 'completed' } });
+        res.end();
+      } else {
+        chat(res, { content: 'hello' }, 'stop'); res.end('data: [DONE]\n\n');
+      }
+    });
+    const model = await bridge(t, upstream, { ACCIO_API_PROTOCOL: protocol, OPENCODE_GO_REASONING_EFFORT: 'xhigh' });
+    const relay = await sidecar(t, 'gateway-relay.cjs', { ACCIO_ORIGINAL_GATEWAY_URL: upstream, ACCIO_MODEL_BRIDGE_URL: model });
+    for (const url of [model, relay]) {
+      const result = frames(await postGzip(url));
+      assert.ok(result.every(frame => !frame.errorCode), JSON.stringify(result));
+      assert.equal(result[0].content.parts[0].text, 'hello');
+      assert.equal(result.at(-1).turnComplete, true);
+    }
+    assert.equal(inputs.length, 2);
+    for (const input of inputs) {
+      assert.equal(protocol === 'responses' ? input.input[0].content : input.messages[0].content, 'test');
+      assert.equal(protocol === 'responses' ? input.reasoning.effort : input.reasoning_effort, 'xhigh');
+    }
+  });
+}
+
+test('gzip bytes and encoding survive passthrough and catalog fallback', async t => {
+  const expected = gzipSync(JSON.stringify(payload));
+  const upstream = await server(t, async (req, res) => {
+    const chunks = [];
+    for await (const chunk of req) chunks.push(chunk);
+    res.end(JSON.stringify({ encoding: req.headers['content-encoding'], data: Buffer.concat(chunks).toString('base64') }));
+  });
+  const model = await bridge(t, upstream);
+  const custom = await sidecar(t, 'gateway-relay.cjs', { ACCIO_ORIGINAL_GATEWAY_URL: upstream, ACCIO_LOCAL_GATEWAY_URL: upstream, ACCIO_MODEL_BRIDGE_URL: model });
+  const official = await sidecar(t, 'gateway-relay.cjs', { ACCIO_ROUTE_MODE: 'official', ACCIO_ORIGINAL_GATEWAY_URL: upstream });
+  for (const [url, route] of [[model, '/api/unknown'], [custom, '/api/unknown'], [custom, '/skills/catalog'], [custom, '/api/llm/config/v2'], [official, llm]]) {
+    const result = JSON.parse(await postGzip(url, payload, route));
+    assert.equal(result.encoding, 'gzip');
+    assert.equal(result.data, expected.toString('base64'));
+  }
+});
+
+test('gzip errors and decoded size limit do not reach the model', async t => {
+  let calls = 0;
+  const upstream = await server(t, (req, res) => { calls++; res.end('{}'); });
+  const model = await bridge(t, upstream);
+  const relay = await sidecar(t, 'gateway-relay.cjs', { ACCIO_ORIGINAL_GATEWAY_URL: upstream, ACCIO_MODEL_BRIDGE_URL: model });
+  for (const [data, error] of [[Buffer.from('invalid gzip'), /incorrect header check/], [gzipSync(Buffer.alloc(32 * 1024 * 1024 + 1, ' ')), /larger than 33554432/]]) {
+    const response = await fetch(relay + llm, { method: 'POST', headers: { 'Content-Encoding': 'gzip' }, body: data, signal: AbortSignal.timeout(10000) });
+    const result = frames(await response.text());
+    assert.equal(result.at(-1).errorCode, 'ADAPTER_REQUEST');
+    assert.match(result.at(-1).errorMessage, error);
+  }
+  const image = frames(await postGzip(relay, { ...payload, generationConfig: { responseModalities: ['IMAGE'] } }));
+  assert.equal(image.at(-1).errorCode, 'CONFIG');
+  assert.match(image.at(-1).errorMessage, /图片通道未启用/);
+  assert.equal(calls, 0);
+});
 
 for (const protocol of ['chat_completions', 'responses']) {
   for (const effort of ['medium', 'xhigh', 'max']) {

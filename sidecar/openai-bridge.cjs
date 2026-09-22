@@ -1,5 +1,8 @@
 const http = require("node:http");
+const { gunzip } = require("node:zlib");
+const { promisify } = require("node:util");
 const { reasoningOptions } = require("./reasoning-options.cjs");
+const gunzipAsync = promisify(gunzip);
 
 const HOST = "127.0.0.1";
 const PORT = Number(process.env.ACCIO_OPENCODE_PORT || 18765);
@@ -818,8 +821,15 @@ async function proxy(request, response, payload) {
   response.end();
 }
 
-function readJson(request) {
-  return readBody(request).then((body) => JSON.parse(body.toString("utf8")));
+async function readJson(request) {
+  let body = await readBody(request);
+  const encoding = String(request.headers["content-encoding"] || "identity").trim().toLowerCase();
+  if (encoding === "gzip") {
+    body = await gunzipAsync(body, { maxOutputLength: MAX_BODY_BYTES });
+  } else if (encoding !== "identity") {
+    throw new Error(`Unsupported Content-Encoding: ${encoding}`);
+  }
+  return JSON.parse(body.toString("utf8"));
 }
 
 function readBody(request) {
@@ -847,7 +857,7 @@ async function forwardGateway(request, response) {
   const targetUrl = `${ORIGINAL_GATEWAY}${incomingUrl.pathname}${incomingUrl.search}`;
   const headers = {};
   for (const [name, value] of Object.entries(request.headers)) {
-    if (["accept-encoding", "connection", "content-encoding", "content-length", "host", "transfer-encoding"].includes(name)) continue;
+    if (["accept-encoding", "connection", "content-length", "host", "transfer-encoding"].includes(name)) continue;
     if (value !== undefined) headers[name] = Array.isArray(value) ? value.join(", ") : value;
   }
   const body = ["GET", "HEAD"].includes(request.method || "GET") ? undefined : await readBody(request);
