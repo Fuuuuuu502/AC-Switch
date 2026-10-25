@@ -1553,6 +1553,26 @@ mod tests {
         format!("http://127.0.0.1:{port}/healthz")
     }
 
+    #[cfg(not(target_os = "windows"))]
+    #[test]
+    fn config_dir_moves_legacy_accio_switch_dir() {
+        let home = std::env::temp_dir().join(format!("ac-switch-home-{}", Uuid::new_v4()));
+        fs::create_dir_all(home.join(".accio-switch/keys")).unwrap();
+        fs::write(home.join(".accio-switch/config.json"), "{}").unwrap();
+        fs::write(home.join(".accio-switch/keys/deepseek"), "sk-test").unwrap();
+        let previous_home = std::env::var_os("HOME");
+        std::env::set_var("HOME", &home);
+        let dir = config_dir();
+        match previous_home {
+            Some(value) => std::env::set_var("HOME", value),
+            None => std::env::remove_var("HOME"),
+        }
+        assert_eq!(dir.unwrap(), home.join(".ac-switch"));
+        assert!(!home.join(".accio-switch").exists());
+        assert_eq!(fs::read_to_string(home.join(".ac-switch/keys/deepseek")).unwrap(), "sk-test");
+        let _ = fs::remove_dir_all(home);
+    }
+
     #[test]
     fn local_health_check_uses_http_status_and_json_body() {
         let ok = local_http_fixture("200 OK", r#"{"ok":true}"#);
