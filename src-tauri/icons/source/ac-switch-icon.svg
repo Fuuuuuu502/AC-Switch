@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="tile" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#26302b"/>
+      <stop offset="1" stop-color="#111613"/>
+    </linearGradient>
+    <!-- 用画布坐标，横线这类零高度路径也能正常填色 -->
+    <linearGradient id="mint" gradientUnits="userSpaceOnUse" x1="0" y1="270" x2="0" y2="740">
+      <stop offset="0" stop-color="#d2f5e5"/>
+      <stop offset="1" stop-color="#79cfa9"/>
+    </linearGradient>
+    <linearGradient id="edge" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.16"/>
+      <stop offset="0.35" stop-color="#ffffff" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+  <!-- macOS 图标网格：824px 圆角方块，四周留白 100px -->
+  <rect x="100" y="100" width="824" height="824" rx="185" fill="url(#tile)"/>
+  <rect x="102" y="102" width="820" height="820" rx="183" fill="none" stroke="url(#edge)" stroke-width="4"/>
+  <!-- AC 字标 -->
+  <g fill="none" stroke="url(#mint)" stroke-width="64" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M276 548 L366 304 L456 548"/>
+    <path d="M306 466 H426"/>
+    <path d="M748 344 A116 116 0 1 0 748 508"/>
+  </g>
+  <!-- 开关：打开状态 -->
+  <rect x="330" y="628" width="364" height="112" rx="56" fill="#1d2b24" stroke="#3e5a4b" stroke-width="8"/>
+  <circle cx="638" cy="684" r="40" fill="url(#mint)"/>
+</svg>

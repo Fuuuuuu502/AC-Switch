@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">
+  <!-- 菜单栏模板图标：只用黑色和透明度，系统会按深浅色自动着色 -->
+  <g transform="translate(-25.3 -24.9) scale(0.112)">
+    <g fill="none" stroke="#000" stroke-width="64" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M276 548 L366 304 L456 548"/>
+      <path d="M306 466 H426"/>
+      <path d="M748 344 A116 116 0 1 0 748 508"/>
+    </g>
+    <rect x="330" y="628" width="364" height="112" rx="56" fill="none" stroke="#000" stroke-width="26"/>
+    <circle cx="638" cy="684" r="40" fill="#000"/>
+  </g>
+</svg>
