@@ -2,7 +2,7 @@
 
 Mac 桌面应用：给 Accio Desktop 切换 OpenCode Go / 自定义 OpenAI 兼容 API，或切回官方积分模型。
 
-界面仿 CC Switch 的供应商卡片与一键启用，不是 CC Switch 的 fork。当前状态与后续边界见 [任务交接.md](任务交接.md)，版本记录见 [CHANGELOG.md](CHANGELOG.md)。
+界面仿 CC Switch 的供应商卡片与一键启用，不是 CC Switch 的 fork。版本记录见 [CHANGELOG.md](CHANGELOG.md)。
 
 ## 当前状态：0.1.5
 
@@ -98,7 +98,7 @@ Windows 适配源代码已加入，安装包必须在 Windows 上构建。当前
 - Windows 不清理未知或孤儿监听进程；端口冲突提示用户退出旧实例。关闭 Switch 窗口仍保留托盘。
 - 未进行 Windows 代码签名，分发前需说明 SmartScreen 提示；不应关闭系统安全防护。
 
-仓库工作流 **Windows x64 build** 仅支持手动触发（Actions → Run workflow），运行 Rust 测试、DPAPI 加解密测试、Node 本地协议测试并生成 `Accio-Switch-Windows-x64` artifact。不会自动发布 Release。私有仓库 Actions 的可用额度以账号为准。
+仓库工作流 **Windows x64 build** 仅支持手动触发（Actions → Run workflow），运行 Rust 测试、DPAPI 加解密测试、Node 本地协议测试并生成 `Accio-Switch-Windows-x64` artifact。不会自动发布 Release。
 
 本机 Windows 构建需要 Node 24、pnpm 10、Rust stable MSVC、Visual Studio C++ Build Tools 和 WebView2；普通使用者安装打包后的程序即可，无需这些开发工具。
 
@@ -110,3 +110,9 @@ pnpm tauri build
 ```
 
 拿到安装包后，先用临时配置/虚构 Key 验证启动、保存、端口冲突和退出；真实模型验收由用户使用自己的 Key 进行，先验证 DeepSeek 普通文字回复。特别确认 Windows Accio 会读取子进程环境中的 GATEWAY_BASE_URL；未经实测不认定该路径可用。图片仍暂缓。
+
+## 许可证
+
+本项目以 [GNU Affero General Public License v3.0](LICENSE)（AGPL-3.0-only）开源。修改后分发，或通过网络向他人提供修改版服务，需以同一许可证公开对应源代码。
+
+本项目与阿里巴巴 / Accio 官方无关。使用第三方模型 API 时，请自行遵守 Accio 及各供应商的服务条款。
