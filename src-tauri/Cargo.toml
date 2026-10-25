@@ -1,6 +1,6 @@
 [package]
-name = "accio-switch"
-version = "0.1.5"
+name = "ac-switch"
+version = "0.1.6"
 description = "Accio model router"
 authors = ["Fuuuuuu502"]
 license = "AGPL-3.0-only"
@@ -12,7 +12,7 @@ edition = "2021"
 # The `_lib` suffix may seem redundant but it is necessary
 # to make the lib name unique and wouldn't conflict with the bin name.
 # This seems to be only an issue on Windows, see https://github.com/rust-lang/cargo/issues/8519
-name = "accio_switch_lib"
+name = "ac_switch_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]

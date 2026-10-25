@@ -2,5 +2,5 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
-    accio_switch_lib::run()
+    ac_switch_lib::run()
 }

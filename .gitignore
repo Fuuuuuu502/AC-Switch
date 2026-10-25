@@ -12,7 +12,7 @@ dist
 dist-ssr
 *.local
 src-tauri/target
-.accio-switch
+.ac-switch
 
 # Editor directories and files
 .vscode/*

@@ -23,7 +23,7 @@ import {
 import clsx from "clsx";
 import { endpointForProtocol, endpointError } from "./provider-endpoint";
 import presets from "./provider-presets.json";
-import appIcon from "./assets/accio-switch.png";
+import appIcon from "./assets/ac-switch.png";
 
 type Provider = {
   id: string;
@@ -278,7 +278,7 @@ export default function App() {
       <header className="titlebar" data-tauri-drag-region>
         <div className="brand" data-tauri-drag-region>
           <img src={appIcon} alt="" width="34" height="34" draggable={false} data-tauri-drag-region />
-          <span data-tauri-drag-region>Accio Switch</span>
+          <span data-tauri-drag-region>AC-Switch</span>
           <span className="brand-divider" data-tauri-drag-region />
           <span className="brand-caption" data-tauri-drag-region>模型连接，轻松切换</span>
         </div>

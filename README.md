@@ -1,10 +1,14 @@
-# Accio Switch
+# AC-Switch
 
 Mac 桌面应用：给 Accio Desktop 切换 OpenCode Go / 自定义 OpenAI 兼容 API，或切回官方积分模型。
 
 界面仿 CC Switch 的供应商卡片与一键启用，不是 CC Switch 的 fork。版本记录见 [CHANGELOG.md](CHANGELOG.md)。
 
-## 当前状态：0.1.5
+## 当前状态：0.1.6
+
+项目由 Accio Switch 更名为 AC-Switch。升级后首次启动会自动把 `~/.accio-switch/` 迁移到 `~/.ac-switch/`，钥匙串中旧名称下保存的 Key 仍可读取，无需重新填写。旧版 `Accio Switch.app` 需先退出，再手动删除。
+
+## 0.1.5 更新
 
 修复 Accio gzip 压缩请求被当作 JSON 解析的问题。网关转发保留压缩头与原始数据，模型桥解压后转换请求；压缩前后的请求大小均限制为 32 MiB。
 
@@ -31,7 +35,7 @@ Mac 桌面应用：给 Accio Desktop 切换 OpenCode Go / 自定义 OpenAI 兼�
 ## 安装与运行
 
 - 当前安装包仅支持 Apple Silicon（arm64）、macOS 13.5 或更新版本，需已安装 `/Applications/Accio.app`。
-- 打开 dmg，将 **Accio Switch.app** 拖到 Applications，再从 Finder 启动。
+- 打开 dmg，将 **AC-Switch.app** 拖到 Applications，再从 Finder 启动。
 - 安装包内置官方 **Node v24.20.0**，无需系统 Node、Rust、pnpm 或开发终端。
 - 当前使用本地 ad-hoc 签名保证包内资源完整性，没有 Developer ID 签名和 Apple 公证，不作为已公证公开发行版。
 - 旧开发中继若仍占用 18765/18767，安装版会提示端口占用，不会任意杀进程。先退出旧实例；无法确认归属的进程应由用户关闭。
@@ -51,7 +55,7 @@ Mac 桌面应用：给 Accio Desktop 切换 OpenCode Go / 自定义 OpenAI 兼�
 - `127.0.0.1:18765`：模型桥，转换 Chat Completions、Responses 与图片请求，转发推理帧并每 12 秒发送 SSE 心跳。
 - Skill / MCP / Plugin / Connector 运行时请求转发 Accio 本地 `4097`；其余未知 API 默认反代 `https://phoenix-gw.alibaba.com`。
 - 官方模式的模型、图片及模型目录转发官方，运行时请求仍走本地 `4097`。
-- 配置与日志：`~/.accio-switch/`；Key 保存在 `keys/`（文件权限 0600）并同步钥匙串。文件中的最新保存值优先，钥匙串用于缺少文件时回退；OpenCode Go 还支持既有 auth.json 回退。
+- 配置与日志：`~/.ac-switch/`（0.1.5 及以前的 `~/.accio-switch/` 会在首次启动时自动迁移）；Key 保存在 `keys/`（文件权限 0600）并同步钥匙串。文件中的最新保存值优先，钥匙串用于缺少文件时回退；OpenCode Go 还支持既有 auth.json 回退。
 - 不修改 Accio asar。Accio 升级后路径可能变化，真实上游兼容性需重新验收。
 
 ## 开发与打包
@@ -82,7 +86,7 @@ node --test tests/presets.test.cjs tests/provider-endpoint.test.mjs
 
 协议测试使用临时配置、随机端口、本地模拟上游和虚构 Key，含 92 秒静默测试，不调用付费服务。模拟结果不能替代 Accio Design、生图、真实 Responses 或真实长研究验收。
 
-桌面验收专用环境：设置 `ACCIO_SWITCH_TEST_DIR` 为独立绝对目录，并同时设置 `ACCIO_SWITCH_TEST_RELAY_PORT`、`ACCIO_SWITCH_TEST_BRIDGE_PORT`。此模式不访问钥匙串、OpenCode 凭据、Accio asar，不修改 launchctl 或启动/重启 Accio；通过 `ACCIO_ORIGINAL_GATEWAY_URL`、`ACCIO_LOCAL_GATEWAY_URL` 和测试供应商配置指向本地模拟服务。正常使用不要设置这些变量。
+桌面验收专用环境：设置 `AC_SWITCH_TEST_DIR` 为独立绝对目录，并同时设置 `AC_SWITCH_TEST_RELAY_PORT`、`AC_SWITCH_TEST_BRIDGE_PORT`。此模式不访问钥匙串、OpenCode 凭据、Accio asar，不修改 launchctl 或启动/重启 Accio；通过 `ACCIO_ORIGINAL_GATEWAY_URL`、`ACCIO_LOCAL_GATEWAY_URL` 和测试供应商配置指向本地模拟服务。正常使用不要设置这些变量。
 
 Windows、Intel、自启、自动更新及签名公证留待后续；新图标已完成。
 
@@ -93,12 +97,12 @@ Windows 适配源代码已加入，安装包必须在 Windows 上构建。当前
 - 系统目标：Windows 11 x64（首轮验收），先安装 Windows Accio。
 - 内置 Node v24.20.0 win-x64，由 `scripts/prepare-node.ps1` 固定 SHA-256 校验并附带许可；Tauri 自动合并 `tauri.windows.conf.json`，生成当前用户 NSIS 安装程序。
 - 凭据使用当前 Windows 用户的 DPAPI 加密，不能直接复制 Mac 的 Key 文件。首次使用请重新填写 Key。
-- 检查常见安装目录与卸载注册表的 InstallLocation；自定义路径可用 `ACCIO_SWITCH_ACCIO_PATH` 指向 `Accio.exe`。
+- 检查常见安装目录与卸载注册表的 InstallLocation；自定义路径可用 `AC_SWITCH_ACCIO_PATH` 指向 `Accio.exe`。
 - 网关变量只传给 Switch 启动的 Accio，不设置全局环境变量。Accio 已运行但未连接中继时尝试正常关闭；无法退出会提示手动退出，不强杀。
 - Windows 不清理未知或孤儿监听进程；端口冲突提示用户退出旧实例。关闭 Switch 窗口仍保留托盘。
 - 未进行 Windows 代码签名，分发前需说明 SmartScreen 提示；不应关闭系统安全防护。
 
-仓库工作流 **Windows x64 build** 仅支持手动触发（Actions → Run workflow），运行 Rust 测试、DPAPI 加解密测试、Node 本地协议测试并生成 `Accio-Switch-Windows-x64` artifact。不会自动发布 Release。
+仓库工作流 **Windows x64 build** 仅支持手动触发（Actions → Run workflow），运行 Rust 测试、DPAPI 加解密测试、Node 本地协议测试并生成 `AC-Switch-Windows-x64` artifact。不会自动发布 Release。
 
 本机 Windows 构建需要 Node 24、pnpm 10、Rust stable MSVC、Visual Studio C++ Build Tools 和 WebView2；普通使用者安装打包后的程序即可，无需这些开发工具。
 

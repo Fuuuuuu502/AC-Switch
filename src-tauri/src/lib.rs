@@ -70,13 +70,13 @@ fn node_compatible_path(path: &Path) -> PathBuf {
 }
 
 fn isolated() -> bool {
-    std::env::var_os("ACCIO_SWITCH_TEST_DIR").is_some()
+    std::env::var_os("AC_SWITCH_TEST_DIR").is_some()
 }
 fn relay_port() -> u16 {
-    test_port("ACCIO_SWITCH_TEST_RELAY_PORT", 18767)
+    test_port("AC_SWITCH_TEST_RELAY_PORT", 18767)
 }
 fn bridge_port() -> u16 {
-    test_port("ACCIO_SWITCH_TEST_BRIDGE_PORT", 18765)
+    test_port("AC_SWITCH_TEST_BRIDGE_PORT", 18765)
 }
 fn test_port(name: &str, default: u16) -> u16 {
     if isolated() {
@@ -98,7 +98,10 @@ fn bridge_url() -> String {
 #[cfg(not(target_os = "windows"))]
 const ACCIO_APP: &str = "/Applications/Accio.app";
 #[cfg(not(target_os = "windows"))]
-const KEYCHAIN_SERVICE: &str = "accio-switch";
+const KEYCHAIN_SERVICE: &str = "ac-switch";
+// 0.1.5 及以前名为 Accio Switch，钥匙串里的旧条目仍可读取
+#[cfg(not(target_os = "windows"))]
+const LEGACY_KEYCHAIN_SERVICE: &str = "accio-switch";
 const IMAGE_ACCOUNT: &str = "image-channel";
 
 fn default_protocol() -> String {
@@ -185,12 +188,17 @@ struct AppState {
 }
 
 fn config_dir() -> Result<PathBuf, String> {
-    let dir = if let Some(dir) = std::env::var_os("ACCIO_SWITCH_TEST_DIR") {
+    let dir = if let Some(dir) = std::env::var_os("AC_SWITCH_TEST_DIR") {
         PathBuf::from(dir)
     } else {
-        dirs::home_dir()
-            .ok_or_else(|| "home directory not found".to_string())?
-            .join(".accio-switch")
+        let home = dirs::home_dir().ok_or_else(|| "home directory not found".to_string())?;
+        let dir = home.join(".ac-switch");
+        // 0.1.5 及以前的配置目录是 ~/.accio-switch，首次启动时整体搬过来
+        let legacy = home.join(".accio-switch");
+        if !dir.exists() && legacy.is_dir() {
+            let _ = fs::rename(&legacy, &dir);
+        }
+        dir
     };
     fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     Ok(dir)
@@ -334,32 +342,26 @@ fn keychain_get(account: &str) -> Result<Option<String>, String> {
     if isolated() {
         return Ok(None);
     }
-    let output = command("security")
-        .args([
-            "find-generic-password",
-            "-s",
-            KEYCHAIN_SERVICE,
-            "-a",
-            account,
-            "-w",
-        ])
-        .output()
-        .map_err(|e| e.to_string())?;
-    if !output.status.success() {
-        let err = String::from_utf8_lossy(&output.stderr);
-        let compact = err.trim().replace('\n', " ");
-        if !compact.is_empty() {
-            switch_log(&format!("keychain_get {account} failed: {compact}"));
+    for service in [KEYCHAIN_SERVICE, LEGACY_KEYCHAIN_SERVICE] {
+        let output = command("security")
+            .args(["find-generic-password", "-s", service, "-a", account, "-w"])
+            .output()
+            .map_err(|e| e.to_string())?;
+        if !output.status.success() {
+            let err = String::from_utf8_lossy(&output.stderr);
+            let compact = err.trim().replace('\n', " ");
+            if !compact.is_empty() {
+                switch_log(&format!("keychain_get {service}/{account} failed: {compact}"));
+            }
+            continue;
         }
-        return Ok(None);
+        let value = String::from_utf8(output.stdout).map_err(|e| e.to_string())?;
+        let trimmed = value.trim().to_string();
+        if !trimmed.is_empty() {
+            return Ok(Some(trimmed));
+        }
     }
-    let value = String::from_utf8(output.stdout).map_err(|e| e.to_string())?;
-    let trimmed = value.trim().to_string();
-    if trimmed.is_empty() {
-        Ok(None)
-    } else {
-        Ok(Some(trimmed))
-    }
+    Ok(None)
 }
 
 #[cfg(not(target_os = "windows"))]
@@ -367,15 +369,11 @@ fn keychain_delete(account: &str) {
     if isolated() {
         return;
     }
-    let _ = command("security")
-        .args([
-            "delete-generic-password",
-            "-s",
-            KEYCHAIN_SERVICE,
-            "-a",
-            account,
-        ])
-        .status();
+    for service in [KEYCHAIN_SERVICE, LEGACY_KEYCHAIN_SERVICE] {
+        let _ = command("security")
+            .args(["delete-generic-password", "-s", service, "-a", account])
+            .status();
+    }
 }
 
 fn opencode_auth_key() -> Option<String> {
@@ -1356,7 +1354,7 @@ fn restart_accio(state: State<AppState>) -> Result<AppStatus, String> {
 
 fn make_tray_menu(app: &AppHandle) -> Result<Menu<tauri::Wry>, String> {
     let cfg = load_config()?;
-    let open_item = MenuItem::with_id(app, "open", "打开 Accio Switch", true, None::<&str>)
+    let open_item = MenuItem::with_id(app, "open", "打开 AC-Switch", true, None::<&str>)
         .map_err(|e| e.to_string())?;
     let restart_item = MenuItem::with_id(app, "restart", "重启 Accio", true, None::<&str>)
         .map_err(|e| e.to_string())?;
@@ -1569,9 +1567,9 @@ mod tests {
     fn node_paths_drop_windows_verbatim_prefix() {
         assert_eq!(
             node_compatible_path(Path::new(
-                r"\\?\C:\Users\Example User\Accio Switch\sidecar\gateway-relay.cjs"
+                r"\\?\C:\Users\Example User\AC-Switch\sidecar\gateway-relay.cjs"
             )),
-            PathBuf::from(r"C:\Users\Example User\Accio Switch\sidecar\gateway-relay.cjs")
+            PathBuf::from(r"C:\Users\Example User\AC-Switch\sidecar\gateway-relay.cjs")
         );
         assert_eq!(
             node_compatible_path(Path::new(r"\\?\UNC\server\share\gateway-relay.cjs")),

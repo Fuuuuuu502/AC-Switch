@@ -6,7 +6,7 @@
   "app": {
     "windows": [{
       "label": "main",
-      "title": "Accio Switch",
+      "title": "AC-Switch",
       "width": 960,
       "height": 780,
       "minWidth": 780,

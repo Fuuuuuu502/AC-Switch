@@ -397,7 +397,7 @@ function requireApiKey(response) {
     errorFrame(
       response,
       "CONFIG",
-      "OpenCode Go API Key is not set. Save the key in Accio Switch and enable the provider again.",
+      "OpenCode Go API Key is not set. Save the key in AC-Switch and enable the provider again.",
     );
     return null;
   }
@@ -527,7 +527,7 @@ async function proxyImage(request, response, payload) {
     errorFrame(
       response,
       "CONFIG",
-      "图片通道未启用。当前对话模型不用于生图，请在 Accio Switch 里单独打开图片通道并填写图片模型。",
+      "图片通道未启用。当前对话模型不用于生图，请在 AC-Switch 里单独打开图片通道并填写图片模型。",
     );
     return;
   }

@@ -1,5 +1,11 @@
 # 版本记录
 
+## 0.1.6 — 2026-10-26
+
+- 项目更名为 AC-Switch：应用名、窗口标题、托盘、安装包名、包名与应用标识（`com.fuuuuuu502.ac-switch`）同步修改。
+- 配置目录改为 `~/.ac-switch/`，首次启动时自动迁移旧的 `~/.accio-switch/`；钥匙串服务名改为 `ac-switch`，读取和删除时兼容旧的 `accio-switch` 条目。
+- 测试与调试环境变量前缀由 `ACCIO_SWITCH_` 改为 `AC_SWITCH_`；Windows 自定义 Accio 路径变量改为 `AC_SWITCH_ACCIO_PATH`。
+
 ## 0.1.5 — 2026-09-22
 
 - 修复 Accio gzip 请求触发 `ADAPTER_REQUEST / Unexpected token` 的问题，模型桥在 JSON 解析前解压，并限制解压后大小。

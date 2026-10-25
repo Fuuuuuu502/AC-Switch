@@ -30,7 +30,7 @@ fn join_components(mut path: PathBuf, components: &[&str]) -> PathBuf {
 }
 
 pub(super) fn accio_exe() -> Result<PathBuf, String> {
-    if let Some(path) = std::env::var_os("ACCIO_SWITCH_ACCIO_PATH") {
+    if let Some(path) = std::env::var_os("AC_SWITCH_ACCIO_PATH") {
         let path = PathBuf::from(path);
         if path.is_file()
             && path
@@ -39,7 +39,7 @@ pub(super) fn accio_exe() -> Result<PathBuf, String> {
         {
             return Ok(path);
         }
-        return Err("ACCIO_SWITCH_ACCIO_PATH 必须指向已安装的 Accio.exe。".into());
+        return Err("AC_SWITCH_ACCIO_PATH 必须指向已安装的 Accio.exe。".into());
     }
     for (base, components) in [
         ("LOCALAPPDATA", &["Programs", "Accio", "Accio.exe"][..]),
@@ -70,14 +70,14 @@ foreach($root in $roots) {
     if !value.is_empty() && Path::new(&value).is_file() {
         return Ok(PathBuf::from(value));
     }
-    Err("未找到 Windows Accio。请先安装；自定义安装位置可通过 ACCIO_SWITCH_ACCIO_PATH 指定 Accio.exe。".into())
+    Err("未找到 Windows Accio。请先安装；自定义安装位置可通过 AC_SWITCH_ACCIO_PATH 指定 Accio.exe。".into())
 }
 
 fn accio_command(script: &str) -> Result<Command, String> {
     let mut cmd = powershell(&format!(
-        r#"$accioProcesses=@(Get-CimInstance Win32_Process -Filter "Name='Accio.exe'" | Where-Object {{ $_.ExecutablePath -eq $env:ACCIO_SWITCH_EXE }}); {script}"#
+        r#"$accioProcesses=@(Get-CimInstance Win32_Process -Filter "Name='Accio.exe'" | Where-Object {{ $_.ExecutablePath -eq $env:AC_SWITCH_EXE }}); {script}"#
     ));
-    cmd.env("ACCIO_SWITCH_EXE", accio_exe()?);
+    cmd.env("AC_SWITCH_EXE", accio_exe()?);
     Ok(cmd)
 }
 
@@ -96,7 +96,7 @@ foreach($p in $accioProcesses) {
 }
 $deadline=[DateTime]::UtcNow.AddSeconds(8)
 do {
-  $remaining=@(Get-CimInstance Win32_Process -Filter "Name='Accio.exe'" | Where-Object { $_.ExecutablePath -eq $env:ACCIO_SWITCH_EXE })
+  $remaining=@(Get-CimInstance Win32_Process -Filter "Name='Accio.exe'" | Where-Object { $_.ExecutablePath -eq $env:AC_SWITCH_EXE })
   if($remaining.Count -eq 0) { exit 0 }
   Start-Sleep -Milliseconds 200
 } while([DateTime]::UtcNow -lt $deadline)
@@ -105,7 +105,7 @@ foreach($p in $remaining) {
 }
 $forceDeadline=[DateTime]::UtcNow.AddSeconds(3)
 do {
-  $remaining=@(Get-CimInstance Win32_Process -Filter "Name='Accio.exe'" | Where-Object { $_.ExecutablePath -eq $env:ACCIO_SWITCH_EXE })
+  $remaining=@(Get-CimInstance Win32_Process -Filter "Name='Accio.exe'" | Where-Object { $_.ExecutablePath -eq $env:AC_SWITCH_EXE })
   if($remaining.Count -eq 0) { exit 0 }
   Start-Sleep -Milliseconds 100
 } while([DateTime]::UtcNow -lt $forceDeadline)
@@ -169,7 +169,7 @@ pub(super) fn clear_owned_orphans(port: u16, _node: &Path, _script: &Path) -> Re
     // First Windows release never kills unknown/orphan listeners. Owned children
     // are tracked by Child handles and stopped separately.
     std::net::TcpListener::bind(("127.0.0.1", port))
-        .map(|_| ()).map_err(|_| format!("端口 {port} 已被占用，请退出旧版 Accio Switch 或相关服务后重试；未终止任何其他进程。"))
+        .map(|_| ()).map_err(|_| format!("端口 {port} 已被占用，请退出旧版 AC-Switch 或相关服务后重试；未终止任何其他进程。"))
 }
 
 pub(super) fn file_set(account: &str, secret: &str) -> Result<(), String> {
@@ -180,10 +180,10 @@ Add-Type -AssemblyName System.Security
 $plain=[Console]::In.ReadToEnd()
 $bytes=[Text.Encoding]::UTF8.GetBytes($plain)
 $encrypted=[Security.Cryptography.ProtectedData]::Protect($bytes,$null,[Security.Cryptography.DataProtectionScope]::CurrentUser)
-[IO.File]::WriteAllBytes($env:ACCIO_SWITCH_KEY_FILE,$encrypted)
+[IO.File]::WriteAllBytes($env:AC_SWITCH_KEY_FILE,$encrypted)
 "#,
     );
-    cmd.env("ACCIO_SWITCH_KEY_FILE", path)
+    cmd.env("AC_SWITCH_KEY_FILE", path)
         .stdin(Stdio::piped())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
@@ -212,12 +212,12 @@ pub(super) fn file_get(account: &str) -> Result<Option<String>, String> {
     let mut cmd = powershell(
         r#"
 Add-Type -AssemblyName System.Security
-$encrypted=[IO.File]::ReadAllBytes($env:ACCIO_SWITCH_KEY_FILE)
+$encrypted=[IO.File]::ReadAllBytes($env:AC_SWITCH_KEY_FILE)
 $plain=[Security.Cryptography.ProtectedData]::Unprotect($encrypted,$null,[Security.Cryptography.DataProtectionScope]::CurrentUser)
 [Console]::Write([Text.Encoding]::UTF8.GetString($plain))
 "#,
     );
-    cmd.env("ACCIO_SWITCH_KEY_FILE", path);
+    cmd.env("AC_SWITCH_KEY_FILE", path);
     let value = output(cmd)
         .map_err(|_| "无法解密 Windows 凭据，请使用原 Windows 用户或重新填写 Key。".to_string())?;
     Ok(if value.is_empty() { None } else { Some(value) })
@@ -252,8 +252,8 @@ mod tests {
     fn dpapi_roundtrip_and_ciphertext() {
         // CI runs with one test thread because this test isolates config via env.
         let dir = std::env::temp_dir().join(format!("accio-dpapi-{}", Uuid::new_v4()));
-        let previous = std::env::var_os("ACCIO_SWITCH_TEST_DIR");
-        std::env::set_var("ACCIO_SWITCH_TEST_DIR", &dir);
+        let previous = std::env::var_os("AC_SWITCH_TEST_DIR");
+        std::env::set_var("AC_SWITCH_TEST_DIR", &dir);
         let result = (|| -> Result<(), String> {
             file_set("test-key", "mock-windows-key")?;
             assert_eq!(file_get("test-key")?, Some("mock-windows-key".into()));
@@ -264,9 +264,9 @@ mod tests {
             Ok(())
         })();
         if let Some(value) = previous {
-            std::env::set_var("ACCIO_SWITCH_TEST_DIR", value);
+            std::env::set_var("AC_SWITCH_TEST_DIR", value);
         } else {
-            std::env::remove_var("ACCIO_SWITCH_TEST_DIR");
+            std::env::remove_var("AC_SWITCH_TEST_DIR");
         }
         let _ = fs::remove_dir_all(dir);
         result.unwrap();
