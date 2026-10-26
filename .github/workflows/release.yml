@@ -1,0 +1,95 @@
+name: Release
+# 推送 v* 标签（或手动填写已有标签）后：在 GitHub 上打 Mac 和 Windows 安装包，
+# 挂到同名 Release 上，生成 SHA256SUMS.txt，全部就绪后再公开发布。
+# 已有同名草稿时沿用它的标题和说明，没有时从 CHANGELOG.md 取对应版本的内容。
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: '要发布的已有标签，如 v0.1.6'
+        required: true
+permissions:
+  contents: write
+concurrency: release-${{ inputs.tag || github.ref_name }}
+env:
+  TAG: ${{ inputs.tag || github.ref_name }}
+  GH_TOKEN: ${{ github.token }}
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+      - name: Check tag matches app version
+        run: |
+          version=$(node -p "require('./package.json').version")
+          [ "v$version" = "$TAG" ] || { echo "标签 $TAG 与 package.json 版本 $version 不一致"; exit 1; }
+      - name: Create draft release if missing
+        run: |
+          # 草稿按标签查不到，只能列出全部 Release 再筛
+          id=$(gh api "repos/$GITHUB_REPOSITORY/releases" --paginate --jq ".[] | select(.tag_name == \"$TAG\") | .id" | head -n1)
+          if [ -n "$id" ]; then
+            echo "沿用已有 Release $id"
+            exit 0
+          fi
+          awk -v v="## ${TAG#v} " 'index($0, v) == 1 {on = 1; next} on && /^## / {exit} on' CHANGELOG.md > notes.md
+          gh release create "$TAG" --draft --verify-tag --title "AC-Switch ${TAG#v}" --notes-file notes.md
+
+  build:
+    needs: prepare
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - os: macos-14
+            prepare: sh scripts/prepare-node.sh
+            bundle: src-tauri/target/release/bundle/dmg/*.dmg
+          - os: windows-latest
+            prepare: powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/prepare-node.ps1
+            bundle: src-tauri/target/release/bundle/nsis/*.exe
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.20.0'
+          cache: pnpm
+      - name: Install stable Rust
+        run: rustup default stable
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Prepare bundled Node
+        run: ${{ matrix.prepare }}
+      - name: Rust tests
+        run: cargo test --manifest-path src-tauri/Cargo.toml -- --test-threads=1
+      - name: Preset and endpoint tests
+        run: node --test tests/presets.test.cjs tests/provider-endpoint.test.mjs
+      - name: Local protocol tests
+        run: node --test tests/sidecars.test.cjs
+      - name: Build installer
+        run: pnpm tauri build
+      - name: Attach installer to release
+        run: gh release upload "$TAG" ${{ matrix.bundle }} --clobber
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checksums and publish
+        run: |
+          gh release download "$TAG" -R "$GITHUB_REPOSITORY" -p '*.dmg' -p '*.exe' -D assets
+          (cd assets && sha256sum *.dmg *.exe > SHA256SUMS.txt && cat SHA256SUMS.txt)
+          gh release upload "$TAG" -R "$GITHUB_REPOSITORY" assets/SHA256SUMS.txt --clobber
+          gh release edit "$TAG" -R "$GITHUB_REPOSITORY" --draft=false --latest
