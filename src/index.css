@@ -115,6 +115,8 @@ h1 { font-size: 25px; line-height: 1.4; font-weight: 600; letter-spacing: 0; mar
 .text-field:hover, select:hover { background: #1b2920; }
 .text-field:focus, select:focus { border-color: #a8e4ce; }
 .field-help { display: block; color: #a5b7ab; font-size: 12px; margin-top: 6px; }
+.inline-link { padding: 0; border: 0; background: none; color: #a8e4ce; font: inherit; text-decoration: underline; text-underline-offset: 2px; cursor: pointer; }
+.text-field[readonly] { color: #a0afa7; background: #161f1a; }
 .select-wrap { position: relative; }
 .select-wrap select { appearance: none; padding-right: 34px; }
 .select-wrap > svg { position: absolute; right: 12px; top: 14px; pointer-events: none; color: #b3c5b8; }

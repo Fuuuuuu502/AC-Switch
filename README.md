@@ -1,12 +1,14 @@
 # AC-Switch
 
-Mac 桌面应用：给 Accio Desktop 切换 OpenCode Go / 自定义 OpenAI 兼容 API，或切回官方积分模型。
+Mac / Windows 桌面应用：给 Accio Desktop 切换 Novaferry、OpenCode Go 等 OpenAI 兼容 API，或切回官方积分模型。
 
 界面仿 CC Switch 的供应商卡片与一键启用，不是 CC Switch 的 fork。版本记录见 [CHANGELOG.md](CHANGELOG.md)。
 
 ## 当前状态：0.1.6
 
-项目由 Accio Switch 更名为 AC-Switch。升级后首次启动会自动把 `~/.accio-switch/` 迁移到 `~/.ac-switch/`，钥匙串中旧名称下保存的 Key 仍可读取，无需重新填写。旧版 `Accio Switch.app` 需先退出，再手动删除。
+内置 [Novaferry](https://novaferry.com/) 供应商：固定显示在供应商列表里，填入 Novaferry 控制台创建的 API Key 即可启用，一个 Key 可调用 GPT 和 Claude 系列在售模型。Novaferry 不能删除，名称和接口地址固定，模型、思考强度和协议可以调整；卡片上的「官网」按钮会打开 Novaferry 首页。
+
+应用换用新图标，菜单栏托盘图标同步更新。
 
 ## 0.1.5 更新
 
@@ -21,6 +23,8 @@ Mac 桌面应用：给 Accio Desktop 切换 OpenCode Go / 自定义 OpenAI 兼�
 配置界面明确使用完整请求地址，切换协议自动替换标准路径；保存前提示 Anthropic 接口、基础地址及明显的协议不匹配。当前不支持 Anthropic Messages。
 
 ## 0.1.2 供应商预设
+
+0.1.6 起另有内置的 Novaferry 供应商，见上文。
 
 内置 OpenCode Go（DeepSeek V4）、OpenAI（GPT-4.1 Mini / GPT-4.1）、DeepSeek（V4 Flash / Pro）、通义千问（北京，Qwen3.8 Max）、智谱（通用 API，GLM-5.3）和 Moonshot（Kimi K3）。预设不迁移旧配置；编辑旧供应商保留原地址、模型与凭据。
 
@@ -55,7 +59,7 @@ Mac 桌面应用：给 Accio Desktop 切换 OpenCode Go / 自定义 OpenAI 兼�
 - `127.0.0.1:18765`：模型桥，转换 Chat Completions、Responses 与图片请求，转发推理帧并每 12 秒发送 SSE 心跳。
 - Skill / MCP / Plugin / Connector 运行时请求转发 Accio 本地 `4097`；其余未知 API 默认反代 `https://phoenix-gw.alibaba.com`。
 - 官方模式的模型、图片及模型目录转发官方，运行时请求仍走本地 `4097`。
-- 配置与日志：`~/.ac-switch/`（0.1.5 及以前的 `~/.accio-switch/` 会在首次启动时自动迁移）；Key 保存在 `keys/`（文件权限 0600）并同步钥匙串。文件中的最新保存值优先，钥匙串用于缺少文件时回退；OpenCode Go 还支持既有 auth.json 回退。
+- 配置与日志：`~/.ac-switch/`；Key 保存在 `keys/`（文件权限 0600）并同步钥匙串。文件中的最新保存值优先，钥匙串用于缺少文件时回退；OpenCode Go 还支持既有 auth.json 回退。
 - 不修改 Accio asar。Accio 升级后路径可能变化，真实上游兼容性需重新验收。
 
 ## 开发与打包

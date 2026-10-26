@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState, useRef, useId, type InputHTMLAttributes, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import {
   AlertCircle,
   ArrowRight,
@@ -7,6 +8,7 @@ import {
   X,
   Cable,
   Check,
+  ExternalLink,
   ChevronDown,
   KeyRound,
   Loader2,
@@ -73,6 +75,10 @@ const OFFICIAL: Provider = {
   apiProtocol: "chat_completions",
   hasKey: false,
 };
+
+// 内置供应商：后端保证始终存在，不能删除，名称和接口地址不可改
+const NOVAFERRY_ID = "novaferry";
+const NOVAFERRY_HOME = "https://novaferry.com/";
 
 const KIND_LABEL: Record<string, string> = {
   official: "官方",
@@ -324,13 +330,14 @@ export default function App() {
               return <article key={provider.id} className={clsx("provider-row", selected && "is-selected")}>
                 <KindMark kind={provider.kind} />
                 <div className="provider-content">
-                  <div className="provider-name"><h3>{provider.name}</h3><span className="provider-kind">{KIND_LABEL[provider.kind] || provider.kind}</span>{selected ? <span className="selected-label"><Check size={12} />已选择</span> : null}</div>
+                  <div className="provider-name"><h3>{provider.name}</h3><span className="provider-kind">{provider.id === NOVAFERRY_ID ? "内置" : KIND_LABEL[provider.kind] || provider.kind}</span>{selected ? <span className="selected-label"><Check size={12} />已选择</span> : null}</div>
                   <div className="provider-details"><span className="model-name" title={provider.model}>{provider.model}</span>{provider.id !== "official" ? <><span className="detail-divider" /><span>{EFFORT_LABEL[provider.reasoningEffort] || provider.reasoningEffort}</span><span className="detail-divider" /><span>{provider.apiProtocol === "responses" ? "Responses" : "Chat Completions"}</span></> : null}</div>
                   {provider.id !== "official" ? <div className={clsx("credential-label", provider.hasKey ? "credential-saved" : requiresKey ? "credential-missing" : "")}><KeyRound size={11} />{provider.hasKey ? "凭据已保存" : requiresKey ? "待配置 API Key" : "未配置 Key · 支持本地接口"}</div> : <div className="credential-label">使用 Accio 官方账户与积分</div>}
                 </div>
                 <div className="provider-actions">
                   {confirming ? <><button className="button button-quiet" disabled={busy} onClick={() => setPendingDelete("")}>取消</button><button className="button button-danger" disabled={busy} onClick={() => removeProvider(provider.id)}>{busyAction === `delete:${provider.id}` ? <Loader2 size={14} className="spin" /> : null}确认删除</button></> : <>
-                    {provider.id !== "official" ? <div className="edit-actions"><button className="icon-button" disabled={busy} aria-label={`编辑 ${provider.name}`} title="编辑供应商" onClick={() => setEditing({ ...provider, apiKey: "" })}><Settings2 size={16} /></button><button className="icon-button delete-button" disabled={busy} aria-label={`删除 ${provider.name}`} title="删除供应商" onClick={() => setPendingDelete(provider.id)}><Trash2 size={15} /></button></div> : null}
+                    {provider.id === NOVAFERRY_ID ? <button className="button button-quiet" title="在浏览器打开 Novaferry 官网" onClick={() => run("open-home", () => openUrl(NOVAFERRY_HOME))}><ExternalLink size={14} />官网</button> : null}
+                    {provider.id !== "official" ? <div className="edit-actions"><button className="icon-button" disabled={busy} aria-label={`编辑 ${provider.name}`} title="编辑供应商" onClick={() => setEditing({ ...provider, apiKey: "" })}><Settings2 size={16} /></button>{provider.id !== NOVAFERRY_ID ? <button className="icon-button delete-button" disabled={busy} aria-label={`删除 ${provider.name}`} title="删除供应商" onClick={() => setPendingDelete(provider.id)}><Trash2 size={15} /></button> : null}</div> : null}
                     <button className={clsx("button switch-button", selected ? "button-selected" : "button-secondary")} disabled={busy || missingKey} title={missingKey ? "请先填写 API Key" : selected ? "重新应用当前供应商" : "切换到此供应商；必要时重启 Accio"} onClick={() => enable(provider.id)}>{busyAction === `enable:${provider.id}` ? <Loader2 size={14} className="spin" /> : selected ? <RefreshCw size={13} /> : <ArrowRight size={14} />}{selected ? "重新启用" : "启用"}</button>
                   </>}
                 </div>
@@ -355,7 +362,7 @@ export default function App() {
       </main>
 
       {choosingProvider ? <Modal title="选择供应商" description="接口与默认模型已配好，下一步填写 API Key。" onClose={() => setChoosingProvider(false)} busy={busy}>
-        <div className="preset-grid">{presets.map(preset => <button key={preset.id} className="preset-card" onClick={() => {
+        <div className="preset-grid">{presets.filter(preset => preset.id !== NOVAFERRY_ID).map(preset => <button key={preset.id} className="preset-card" onClick={() => {
           setEditing({ id: "", kind: preset.kind, name: preset.name, endpoint: preset.endpoint, model: preset.models[0], reasoningEffort: preset.reasoningEffort, apiProtocol: "chat_completions", hasKey: false, apiKey: "" });
           setChoosingProvider(false);
         }}><strong>{preset.name}</strong><span>{preset.models[0]}</span><ArrowRight size={16} /></button>)}</div>
@@ -366,12 +373,12 @@ export default function App() {
         <form onSubmit={(event) => { event.preventDefault(); saveProvider(); }}>
           <div className="modal-fields">
             {error ? <div className="notice notice-error" role="alert"><AlertCircle size={16} /><p>{error}</p></div> : null}
-            <Field label="API Key"><TextField required={Boolean(editingPreset && !editing.hasKey)} type="password" autoComplete="off" value={editing.apiKey} placeholder={editing.hasKey ? "已保存 · 留空保持不变" : "sk-..."} onChange={(e) => setEditing({ ...editing, apiKey: e.target.value })} /><span className="field-help">{editingPreset ? "填写所选平台的 API Key。" : "本地模型可留空。"}已有凭据留空不会修改。</span></Field>
+            <Field label="API Key"><TextField required={Boolean(editingPreset && !editing.hasKey)} type="password" autoComplete="off" value={editing.apiKey} placeholder={editing.hasKey ? "已保存 · 留空保持不变" : "sk-..."} onChange={(e) => setEditing({ ...editing, apiKey: e.target.value })} /><span className="field-help">{editingPreset ? "填写所选平台的 API Key。" : "本地模型可留空。"}已有凭据留空不会修改。{editing.id === NOVAFERRY_ID ? <> 还没有 Key？<button type="button" className="inline-link" onClick={() => run("open-home", () => openUrl(NOVAFERRY_HOME))}>前往 Novaferry 官网</button></> : null}</span></Field>
             {editingPreset ? <div className="form-note"><Info size={14} />已匹配 Chat Completions 协议和完整请求地址，通常只需填写 Key，无需修改高级设置。</div> : null}
             {editingPreset ? <Field label="对话模型"><div className="select-wrap"><select value={editing.model} onChange={e => setEditing({ ...editing, model: e.target.value })}>{Array.from(new Set([...editingPreset.models, editing.model])).map(model => <option key={model} value={model}>{model}</option>)}</select><ChevronDown size={14} /></div><span className="field-help">已选择默认模型，可直接保存。其他模型可在高级设置填写。</span></Field> : null}
             <details className="advanced-settings" open={editingPreset ? undefined : true}><summary>高级设置 · 接口、模型与协议</summary><div className="advanced-fields">
-            <Field label="供应商名称"><TextField required value={editing.name} onChange={(e) => setEditing({ ...editing, name: e.target.value })} /></Field>
-            <Field label="完整请求地址"><TextField required value={editing.endpoint} spellCheck={false} onChange={(e) => setEditing({ ...editing, endpoint: e.target.value })} /><span className="field-help">填写实际接收请求的完整 URL，不是官网或 SDK 基础地址。{editing.apiProtocol === "responses" ? "通常以 /responses 结尾。" : "通常以 /chat/completions 结尾。"}</span></Field>
+            <Field label="供应商名称"><TextField required readOnly={editing.id === NOVAFERRY_ID} value={editing.name} onChange={(e) => setEditing({ ...editing, name: e.target.value })} /></Field>
+            <Field label="完整请求地址"><TextField required readOnly={editing.id === NOVAFERRY_ID} value={editing.endpoint} spellCheck={false} onChange={(e) => setEditing({ ...editing, endpoint: e.target.value })} /><span className="field-help">填写实际接收请求的完整 URL，不是官网或 SDK 基础地址。{editing.apiProtocol === "responses" ? "通常以 /responses 结尾。" : "通常以 /chat/completions 结尾。"}</span></Field>
             <div className="form-columns"><Field label="模型名称"><TextField required value={editing.model} onChange={(e) => setEditing({ ...editing, model: e.target.value })} /></Field><Field label="思考强度"><div className="select-wrap"><select value={editing.reasoningEffort} onChange={(e) => setEditing({ ...editing, reasoningEffort: e.target.value })}>{Array.from(new Set([...(editingPreset?.efforts || ["disabled", "low", "medium", "high", "xhigh", "max"]), editing.reasoningEffort])).map(item => <option key={item} value={item}>{EFFORT_LABEL[item] || item}</option>)}</select><ChevronDown size={14} /></div><span className="field-help">可用强度取决于模型和代理支持；极高、最强通常需要更长时间和更多额度。</span></Field></div>
             <Field label="对话协议"><div className="select-wrap"><select value={editing.apiProtocol || "chat_completions"} onChange={(e) => { setError(""); setEditing({ ...editing, apiProtocol: e.target.value, endpoint: endpointForProtocol(editing.endpoint, e.target.value) }); }}><option value="chat_completions">Chat Completions</option><option value="responses">Responses API</option></select><ChevronDown size={14} /></div><span className="field-help">切换协议会同步替换标准接口路径；自定义路径需自行核对。当前不支持 Anthropic Messages（/anthropic）。</span></Field>
             </div></details>

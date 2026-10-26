@@ -9,6 +9,7 @@ const expected = {
   qwen: { enable_thinking: false },
   zhipu: { thinking: { type: 'enabled' } },
   kimi: { reasoning_effort: 'high' },
+  novaferry: { reasoning_effort: 'high' },
 };
 for (const p of presets) test(`${p.name}: default model reasoning request`, () => {
   assert.equal(new URL(p.endpoint).protocol, 'https:');
@@ -30,4 +31,9 @@ test('Qwen and GLM enable reasoning without unsupported effort; K3 never sends t
   assert.deepEqual(reasoningOptions(presets[3].endpoint, 'qwen3.8-max', 'high'), { enable_thinking: true });
   assert.deepEqual(reasoningOptions(presets[4].endpoint, 'glm-5.3', 'disabled'), { thinking: { type: 'disabled' } });
   for (const effort of ['low', 'high', 'max']) assert.deepEqual(reasoningOptions(presets[5].endpoint, 'kimi-k3', effort), { reasoning_effort: effort });
+});
+test('Novaferry passes OpenAI-style reasoning effort only', () => {
+  const novaferry = presets.find(p => p.id === 'novaferry');
+  assert.deepEqual(reasoningOptions(novaferry.endpoint, 'claude-opus-5-5', 'disabled'), {});
+  for (const effort of novaferry.efforts.filter(e => e !== 'disabled')) assert.deepEqual(reasoningOptions(novaferry.endpoint, 'gpt-6.1-sol', effort), { reasoning_effort: effort });
 });

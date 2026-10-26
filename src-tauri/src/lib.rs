@@ -227,15 +227,43 @@ fn default_config() -> AppConfig {
     }
 }
 
+// 内置供应商：始终排在列表最前，不能删除，名称和接口地址不可改
+const NOVAFERRY_ID: &str = "novaferry";
+const NOVAFERRY_ENDPOINT: &str = "https://api.novaferry.com/v1/chat/completions";
+
+fn novaferry_provider() -> Provider {
+    Provider {
+        id: NOVAFERRY_ID.to_string(),
+        kind: "custom_openai".to_string(),
+        name: "Novaferry".to_string(),
+        endpoint: NOVAFERRY_ENDPOINT.to_string(),
+        model: "gpt-6.1-sol".to_string(),
+        reasoning_effort: "high".to_string(),
+        api_protocol: default_protocol(),
+        image_endpoint: String::new(),
+        image_model: String::new(),
+        has_key: false,
+    }
+}
+
+fn with_fixed_providers(mut cfg: AppConfig) -> AppConfig {
+    if !cfg.providers.iter().any(|p| p.id == NOVAFERRY_ID) {
+        cfg.providers.insert(0, novaferry_provider());
+    }
+    cfg
+}
+
 fn load_config() -> Result<AppConfig, String> {
     let path = config_path()?;
     if !path.exists() {
         let cfg = default_config();
         save_config(&cfg)?;
-        return Ok(cfg);
+        return Ok(with_fixed_providers(cfg));
     }
     let raw = fs::read_to_string(&path).map_err(|e| e.to_string())?;
-    serde_json::from_str(&raw).map_err(|e| e.to_string())
+    serde_json::from_str(&raw)
+        .map(with_fixed_providers)
+        .map_err(|e| e.to_string())
 }
 
 fn save_config(cfg: &AppConfig) -> Result<(), String> {
@@ -1118,6 +1146,10 @@ fn upsert_provider(
         if id == "official" || id == IMAGE_ACCOUNT {
             return Err("不能使用保留的供应商标识".into());
         }
+        let fixed = id == NOVAFERRY_ID;
+        if fixed && !input.endpoint.starts_with("https://api.novaferry.com/") {
+            return Err("Novaferry 是内置供应商，接口地址不能修改".into());
+        }
         if let Some(key) = input.api_key {
             let trimmed = key.trim().to_string();
             if trimmed.is_empty() {
@@ -1128,8 +1160,8 @@ fn upsert_provider(
         }
         let provider = with_has_key(Provider {
             id: id.clone(),
-            kind: input.kind,
-            name: input.name,
+            kind: if fixed { "custom_openai".into() } else { input.kind },
+            name: if fixed { "Novaferry".into() } else { input.name },
             endpoint: input.endpoint,
             model: input.model,
             reasoning_effort: input.reasoning_effort,
@@ -1235,6 +1267,9 @@ fn delete_provider(
         key_file(&id)?;
         if id == "official" || id == IMAGE_ACCOUNT {
             return Err("不能删除保留标识".into());
+        }
+        if id == NOVAFERRY_ID {
+            return Err("Novaferry 是内置供应商，不能删除".into());
         }
         let mut cfg = load_config()?;
         if !cfg.providers.iter().any(|p| p.id == id) {
@@ -1551,6 +1586,16 @@ mod tests {
             stream.write_all(response.as_bytes()).unwrap();
         });
         format!("http://127.0.0.1:{port}/healthz")
+    }
+
+    #[test]
+    fn novaferry_is_always_first_and_not_duplicated() {
+        let cfg: AppConfig =
+            serde_json::from_str(r#"{"activeProviderId":"official","providers":[]}"#).unwrap();
+        let cfg = with_fixed_providers(with_fixed_providers(cfg));
+        assert_eq!(cfg.providers.len(), 1);
+        assert_eq!(cfg.providers[0].id, NOVAFERRY_ID);
+        assert_eq!(cfg.providers[0].endpoint, NOVAFERRY_ENDPOINT);
     }
 
     #[cfg(not(target_os = "windows"))]

@@ -2,6 +2,7 @@
 
 ## 0.1.6 — 2026-10-26
 
+- 新增内置 Novaferry 供应商：固定排在列表最前，不能删除，名称和接口地址不可改；卡片上的「官网」按钮和编辑窗口里的链接会打开 https://novaferry.com/ 。思考强度按 OpenAI 方式只传 `reasoning_effort`。
 - 项目更名为 AC-Switch：应用名、窗口标题、托盘、安装包名、包名与应用标识（`com.fuuuuuu502.ac-switch`）同步修改。
 - 配置目录改为 `~/.ac-switch/`，首次启动时自动迁移旧的 `~/.accio-switch/`；钥匙串服务名改为 `ac-switch`，读取和删除时兼容旧的 `accio-switch` 条目。
 - 换新图标：深色圆角底、薄荷绿「AC」字标加开关，菜单栏托盘图标同步更换；图标源文件放在 `src-tauri/icons/source/`。
