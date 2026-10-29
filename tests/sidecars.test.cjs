@@ -240,6 +240,30 @@ test('relay official/custom/default/local routing and catalog fallback body', as
   }
 });
 
+test('relay serves Accio 0.36 v3 model cache and reports last client request', async t => {
+  const temp = await mkdtemp(path.join(os.tmpdir(), 'accio-cache-test-'));
+  t.after(() => rm(temp, { recursive: true, force: true }));
+  const upstream = 'https://phoenix-gw.alibaba.com';
+  const snapshot = name => ({ success: true, code: '200', message: '', data: [{ provider: 'openai', modelList: [{ modelCode: 'm1', modelDisplayName: name, visible: true }] }],
+    ext: { version: 'v1-m1', serverTime: 0, nextChangeAt: null, ttlSeconds: 300, labelList: [{ targetModelCode: 'm1', displayName: name }] } });
+  const cachePath = path.join(temp, 'model_cache.json');
+  require('node:fs').writeFileSync(cachePath, JSON.stringify({ version: 3,
+    routeSnapshots: {
+      [JSON.stringify(['http://127.0.0.1:18767', 'acct', 'GLOBAL', 'zh', '0.36.2', true])]: { raw: snapshot('relay copy'), etag: 'a', validatedAt: 200 },
+      [JSON.stringify([upstream, 'acct', 'GLOBAL', 'zh', '0.35.3', true])]: { raw: snapshot('official old'), etag: 'b', validatedAt: 100 },
+      [JSON.stringify([upstream, 'acct', 'GLOBAL', 'zh', '0.36.2', true])]: { raw: snapshot('official new'), etag: 'c', validatedAt: 150 },
+    },
+    legacySnapshots: { 'GLOBAL::zh': snapshot('legacy') } }));
+  const model = await server(t, (req, res) => { res.end(JSON.stringify({ ok: true, model: 'gpt-6.1-sol', provider: 'custom_openai', reasoningEffort: 'high' })); });
+  const url = await sidecar(t, 'gateway-relay.cjs', { ACCIO_ORIGINAL_GATEWAY_URL: upstream, ACCIO_MODEL_BRIDGE_URL: model, ACCIO_MODEL_CACHE_PATH: cachePath });
+  assert.equal((await (await fetch(url + '/healthz')).json()).lastClientRequestAt, 0);
+  const response = await fetch(url + '/api/llm/config/v2', { method: 'POST', body: '{}', headers: { 'x-package-region': 'GLOBAL', 'accept-language': 'zh-CN,zh;q=0.9' } });
+  const catalog = await response.json();
+  assert.equal(catalog.data[0].modelList[0].modelDisplayName, '自定义 API · gpt-6.1-sol · high | Accio: official new');
+  assert.equal(catalog.ext.labelList[0].displayName, '自定义 API · gpt-6.1-sol · high | Accio: official new');
+  assert.ok((await (await fetch(url + '/healthz')).json()).lastClientRequestAt > 0);
+});
+
 test('12-second pings preserve >90-second silence through relay', { timeout: 110000 }, async t => {
   const upstream = await server(t, async (req, res) => {
     await body(req); res.setHeader('Content-Type', 'text/event-stream'); res.flushHeaders();

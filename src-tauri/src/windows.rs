@@ -160,7 +160,10 @@ pub(super) fn accio_process_status() -> (bool, bool) {
         .ok()
         .and_then(|value| {
             let mut parts = value.split('|');
-            Some((parts.next()? == "True", parts.next()? == "True"))
+            let running = parts.next()? == "True";
+            // 新版 Accio 请求结束即断开连接，最近收到过请求也算已接入
+            let connected = parts.next()? == "True" || (running && super::relay_recently_used());
+            Some((running, connected))
         })
         .unwrap_or((false, false))
 }

@@ -159,15 +159,41 @@ function applyActualModelLabel(snapshot, status) {
   return { snapshot, actualLabel };
 }
 
+// v3（Accio 0.36 起）：routeSnapshots 的键是 [网关, 账号, 地区, 语言, 版本, 标志] 的 JSON 数组，
+// 值是 { raw, etag, validatedAt }；旧的「地区::语言」快照移到了 legacySnapshots。
+function pickRouteSnapshot(routeSnapshots, region, language) {
+  const entries = [];
+  for (const [key, value] of Object.entries(routeSnapshots)) {
+    if (!value || typeof value.raw !== "object" || value.raw === null) continue;
+    let parts = [];
+    try { parts = JSON.parse(key); } catch {}
+    if (!Array.isArray(parts)) parts = [];
+    entries.push({
+      raw: value.raw,
+      official: parts[0] === ORIGINAL_GATEWAY,
+      matches: String(parts[2] || "").toUpperCase() === region && String(parts[3] || "").toLowerCase() === language,
+      validatedAt: Number(value.validatedAt) || 0,
+    });
+  }
+  // 优先同地区语言、来自官方网关（标签未被改写）、最近校验过的快照
+  entries.sort((a, b) => b.matches - a.matches || b.official - a.official || b.validatedAt - a.validatedAt);
+  return entries[0]?.raw;
+}
+
 function readCachedModelCatalog(request) {
   const cache = JSON.parse(fs.readFileSync(MODEL_CACHE_PATH, "utf8"));
-  if (cache.version !== 2 || !cache.snapshots || typeof cache.snapshots !== "object") {
-    throw new Error("unsupported Accio model cache format");
-  }
   const region = getHeader(request, "x-package-region").trim().toUpperCase();
   const language = getHeader(request, "accept-language").split(",")[0].trim().replace("_", "-").split("-")[0].toLowerCase();
   const cacheKey = `${region}::${language}`;
-  const snapshot = cache.snapshots[cacheKey] || cache.snapshots["GLOBAL::zh"] || Object.values(cache.snapshots)[0];
+  let snapshot;
+  if (cache.version === 3 && cache.routeSnapshots && typeof cache.routeSnapshots === "object") {
+    const legacy = cache.legacySnapshots && typeof cache.legacySnapshots === "object" ? cache.legacySnapshots : {};
+    snapshot = pickRouteSnapshot(cache.routeSnapshots, region, language) || legacy[cacheKey] || legacy["GLOBAL::zh"] || Object.values(legacy)[0];
+  } else if (cache.version === 2 && cache.snapshots && typeof cache.snapshots === "object") {
+    snapshot = cache.snapshots[cacheKey] || cache.snapshots["GLOBAL::zh"] || Object.values(cache.snapshots)[0];
+  } else {
+    throw new Error("unsupported Accio model cache format");
+  }
   if (!snapshot) throw new Error(`Accio model cache snapshot not found: ${cacheKey}`);
   return JSON.parse(JSON.stringify(snapshot));
 }
@@ -217,6 +243,9 @@ async function forward(request, response, baseUrl, bodyOverride) {
   response.end();
 }
 
+// 最近一次收到 Accio 请求的时间，供桌面端判断 Accio 是否已接入
+let lastClientRequestAt = 0;
+
 const server = http.createServer(async (request, response) => {
   try {
     if (request.method === "GET" && request.url === "/healthz") {
@@ -229,10 +258,12 @@ const server = http.createServer(async (request, response) => {
           originalGateway: ORIGINAL_GATEWAY,
           modelPaths: MODEL_PATHS,
           imagePaths: IMAGE_PATHS,
+          lastClientRequestAt,
         }),
       );
       return;
     }
+    lastClientRequestAt = Date.now();
     const pathname = new URL(request.url || "/", `http://${HOST}:${PORT}`).pathname;
     if (request.method === "POST" && pathname === "/api/llm/config/v2") {
       if (ROUTE_MODE === "official") {

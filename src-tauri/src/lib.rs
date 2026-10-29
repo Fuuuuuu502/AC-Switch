@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tauri::{
     image::Image,
     menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem},
@@ -799,20 +799,62 @@ fn wait_health(url: &str) -> Result<(), String> {
     Err(format!("timed out waiting for {url}"))
 }
 
+// Accio 0.36 起每个请求结束就断开连接，只看已建立的连接会时有时无。
+// 先看 Accio 进程启动时带的网关变量，再看连接，最后看中继最近是否收到过请求。
 #[cfg(not(target_os = "windows"))]
 fn accio_using_relay() -> bool {
     if isolated() {
         return false;
     }
+    if accio_launched_with_relay() {
+        return true;
+    }
     let output = command("lsof")
         .args(["-nP", "-iTCP:18767", "-sTCP:ESTABLISHED"])
         .output();
-    match output {
+    let connected = match output {
         Ok(out) => String::from_utf8_lossy(&out.stdout)
             .lines()
             .any(|line| line.contains("Accio")),
         Err(_) => false,
-    }
+    };
+    connected || (accio_running() && relay_recently_used())
+}
+
+#[cfg(not(target_os = "windows"))]
+fn accio_launched_with_relay() -> bool {
+    let expected = format!("GATEWAY_BASE_URL={}", relay_url());
+    let Ok(out) = command("pgrep").args(["-x", "Accio"]).output() else {
+        return false;
+    };
+    String::from_utf8_lossy(&out.stdout)
+        .split_whitespace()
+        .any(|pid| {
+            command("ps")
+                .args(["eww", "-o", "command=", "-p", pid])
+                .output()
+                .map(|ps| {
+                    String::from_utf8_lossy(&ps.stdout)
+                        .split_whitespace()
+                        .any(|token| token == expected)
+                })
+                .unwrap_or(false)
+        })
+}
+
+const RELAY_RECENT_MS: u64 = 120_000;
+
+fn relay_recently_used() -> bool {
+    let Some(last) = curl_json(&format!("{}/healthz", relay_url()))
+        .and_then(|status| status.get("lastClientRequestAt").and_then(|value| value.as_u64()))
+    else {
+        return false;
+    };
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_millis() as u64)
+        .unwrap_or(0);
+    last > 0 && now.saturating_sub(last) <= RELAY_RECENT_MS
 }
 
 fn detect_accio_paths() -> (String, String) {
