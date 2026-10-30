@@ -245,6 +245,13 @@ export default function App() {
     if (!editing) return;
     const validationError = endpointError(editing.endpoint, editing.apiProtocol || "chat_completions");
     if (validationError) { setError(validationError); return; }
+    // 接口说明了模型支持哪些协议时（如 Novaferry 的 Claude 只支持 Chat Completions），不让保存不支持的组合
+    const protocol = editing.apiProtocol || "chat_completions";
+    const endpoints = modelList?.models.find(model => model.id === editing.model)?.endpoints;
+    if (endpoints && !endpoints.includes(protocol === "responses" ? "openai-response" : "openai")) {
+      setError(`${editing.model} 不支持 ${protocol === "responses" ? "Responses" : "Chat Completions"} 协议，请在高级设置里换一个协议，或换一个模型。`);
+      return;
+    }
     const savedId = editing.id;
     const shouldApply = Boolean(savedId) && savedId === activeId;
     await run("save", async () => {

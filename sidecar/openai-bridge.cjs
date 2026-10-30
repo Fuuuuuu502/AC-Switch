@@ -499,6 +499,8 @@ function toResponsesInput(payload) {
       return { type: message.role === "assistant" ? "output_text" : "input_text", text: part.text };
     }) : message.content ?? "";
     if (Array.isArray(message.tool_calls) && message.tool_calls.length > 0) {
+      // 同一轮里先放模型说的话，再放工具调用，否则工具调用和结果之间会夹着一条模型消息
+      if (content) input.push({ role: "assistant", content });
       for (const call of message.tool_calls) {
         input.push({
           type: "function_call",
@@ -507,7 +509,6 @@ function toResponsesInput(payload) {
           arguments: call.function?.arguments || "{}",
         });
       }
-      if (content) input.push({ role: "assistant", content });
       continue;
     }
     input.push({ role: message.role, content });
