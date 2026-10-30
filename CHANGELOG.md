@@ -3,8 +3,8 @@
 ## 0.1.9 — 2026-10-30
 
 - 修复用 Claude 模型时报 `This model does not support assistant message prefill`：Accio 的对话以模型消息结尾时，补一条用户消息「Continue.」让模型接着回答；带工具调用的消息和正常以用户消息结尾的对话不受影响。出现这种情况时模型桥日志会记下各消息的角色顺序。
-- 切到 Responses 协议后仍能识别预设，模型下拉框不再消失；Novaferry 在 Responses 下只列出支持该协议的 GPT 模型（Claude 只支持 Chat Completions），并修正「一个 Key 调用全部模型」的说明：令牌分组需选 auto。
-- 模型下拉框改为用当前 Key 向供应商读取可用模型（`/models` 接口），按所选协议筛选（如 Novaferry 的 Claude 只出现在 Chat Completions 下）；读取失败时退回预设列表，并在下方显示原因。
+- 切到 Responses 协议后仍能识别预设，模型下拉框不再消失；Responses 下只列出支持该协议的模型。
+- 模型下拉框改为用当前 Key 向供应商读取可用模型（`/models` 接口），按所选协议筛选；读取失败时退回预设列表，并在下方显示原因。
 
 ## 0.1.8 — 2026-10-30
 
@@ -17,7 +17,7 @@
 
 ## 0.1.6 — 2026-10-26
 
-- 新增内置 Novaferry 供应商：固定排在列表最前，不能删除，名称和接口地址不可改；卡片上的「官网」按钮和编辑窗口里的链接会打开 https://novaferry.com/ 。思考强度按 OpenAI 方式只传 `reasoning_effort`。
+- 新增一个内置供应商：固定排在列表最前，不能删除，名称和接口地址不可改；卡片上有「官网」按钮。
 - 项目更名为 AC-Switch：应用名、窗口标题、托盘、安装包名、包名与应用标识（`com.fuuuuuu502.ac-switch`）同步修改。
 - 配置目录改为 `~/.ac-switch/`，首次启动时自动迁移旧的 `~/.accio-switch/`；钥匙串服务名改为 `ac-switch`，读取和删除时兼容旧的 `accio-switch` 条目。
 - 换新图标：深色圆角底、薄荷绿「AC」字标加开关，菜单栏托盘图标同步更换；图标源文件放在 `src-tauri/icons/source/`。

@@ -11,11 +11,11 @@
 
 ![macOS](https://img.shields.io/badge/macOS-000000?logo=apple&logoColor=white) ![Windows](https://img.shields.io/badge/Windows-0078D4?logo=windows&logoColor=white) [![License](https://img.shields.io/badge/license-AGPL--3.0-111111)](LICENSE)
 
-**[下载](https://github.com/Fuuuuuu502/AC-Switch/releases)** &nbsp;·&nbsp; **[Novaferry](https://novaferry.com/)** &nbsp;·&nbsp; **[更新记录](CHANGELOG.md)**
+**[下载](https://github.com/Fuuuuuu502/AC-Switch/releases)** &nbsp;·&nbsp; **[更新记录](CHANGELOG.md)**
 
 <br>
 
-<img src="docs/screenshot.png" width="860" alt="AC-Switch 主界面：当前通道为 Novaferry，下方是官方、Novaferry、DeepSeek、Kimi 等供应商">
+<img src="docs/screenshot.png" width="860" alt="AC-Switch 主界面：当前使用 DeepSeek，下方是官方、DeepSeek、Kimi 等供应商">
 
 </div>
 
@@ -35,7 +35,7 @@ Accio Desktop 默认只能用官方积分模型。AC-Switch 让它改用你自�
 
 **1 · 安装。** 从 **[Releases](https://github.com/Fuuuuuu502/AC-Switch/releases)** 下载：Mac 用 `.dmg`（Apple Silicon，macOS 13.5 及以上），Windows 用 `-setup.exe`（x64）。需要先装好 Accio Desktop。
 
-**2 · 添加供应商。** 打开 AC-Switch，点「添加供应商」选一个预设，填入 API Key 保存。也可以直接用列表里的 Novaferry。
+**2 · 添加供应商。** 打开 AC-Switch，点「添加供应商」选一个预设，填入 API Key 保存。
 
 **3 · 启用。** 在供应商卡片上点「启用」，回到 Accio 就是新模型。想换回来，启用「Accio 官方原生认证」即可。
 
@@ -43,7 +43,6 @@ Accio Desktop 默认只能用官方积分模型。AC-Switch 让它改用你自�
 
 | 供应商 | 说明 |
 |---|---|
-| **[Novaferry](https://novaferry.com/)** | 内置。令牌分组选 auto 后一个 Key 调用 GPT 和 Claude；Claude 只支持 Chat Completions |
 | OpenCode Go | DeepSeek 系列 |
 | OpenAI | GPT 系列 |
 | DeepSeek | DeepSeek 开放平台 |
