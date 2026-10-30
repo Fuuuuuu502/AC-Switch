@@ -38,6 +38,9 @@ type Provider = {
   hasKey: boolean;
 };
 
+type RemoteModel = { id: string; endpoints?: string[] };
+type ModelList = { request: string; loading: boolean; models: RemoteModel[]; error: string };
+
 type ImageChannel = {
   enabled: boolean;
   endpoint: string;
@@ -159,6 +162,32 @@ export default function App() {
   const editingProtocol = editing?.apiProtocol || "chat_completions";
   const presetModels = (preset: (typeof presets)[number], protocol: string) =>
     protocol === "responses" && "responsesModels" in preset && Array.isArray(preset.responsesModels) ? preset.responsesModels : preset.models;
+  const [modelList, setModelList] = useState<ModelList | null>(null);
+  const listEndpoint = editing ? endpointForProtocol(editing.endpoint, "chat_completions").trim() : "";
+  const listRequest = editing ? JSON.stringify([editing.id, editing.kind, listEndpoint, editing.apiKey]) : "";
+  // 打开编辑窗口或改了地址、Key 后，用这个 Key 向供应商读取可用模型（停顿 0.5 秒再请求）
+  useEffect(() => {
+    if (!editing || !/^https?:\/\/[^/]/.test(listEndpoint)) { setModelList(null); return; }
+    let cancelled = false;
+    setModelList(current => ({ request: listRequest, loading: true, models: current?.models || [], error: "" }));
+    const timer = setTimeout(() => {
+      invoke<{ ok: boolean; models?: RemoteModel[]; error?: string }>("list_models", { input: { providerId: editing.id || null, kind: editing.kind, endpoint: listEndpoint, apiKey: editing.apiKey || null } })
+        .then(result => { if (!cancelled) setModelList({ request: listRequest, loading: false, models: result.ok ? result.models || [] : [], error: result.ok ? "" : result.error || "未知错误" }); })
+        .catch(e => { if (!cancelled) setModelList({ request: listRequest, loading: false, models: [], error: String(e) }); });
+    }, 500);
+    return () => { cancelled = true; clearTimeout(timer); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [listRequest]);
+  // 下拉框里的模型：优先用接口返回的列表，按协议筛选；取不到时用预设列表
+  const modelOptions = (protocol: string) => {
+    const remote = (modelList?.models || []).filter(model => {
+      if (!model.endpoints) return true;
+      if (model.endpoints.includes("image-generation")) return false;
+      return model.endpoints.includes(protocol === "responses" ? "openai-response" : "openai");
+    }).map(model => model.id);
+    if (remote.length > 0) return remote;
+    return editingPreset ? presetModels(editingPreset, protocol) : [];
+  };
   const [pendingDelete, setPendingDelete] = useState("");
 
   const providers = useMemo(() => [OFFICIAL, ...(config?.providers || [])], [config]);
@@ -379,7 +408,7 @@ export default function App() {
             {error ? <div className="notice notice-error" role="alert"><AlertCircle size={16} /><p>{error}</p></div> : null}
             <Field label="API Key"><TextField required={Boolean(editingPreset && !editing.hasKey)} type="password" autoComplete="off" value={editing.apiKey} placeholder={editing.hasKey ? "已保存 · 留空保持不变" : "sk-..."} onChange={(e) => setEditing({ ...editing, apiKey: e.target.value })} /><span className="field-help">{editingPreset ? "填写所选平台的 API Key。" : "本地模型可留空。"}已有凭据留空不会修改。{editing.id === NOVAFERRY_ID ? <> 还没有 Key？<button type="button" className="inline-link" onClick={() => run("open-home", () => openUrl(NOVAFERRY_HOME))}>前往 Novaferry 官网</button></> : null}</span></Field>
             {editingPreset ? <div className="form-note"><Info size={14} />已匹配 {editingProtocol === "responses" ? "Responses" : "Chat Completions"} 协议和完整请求地址，通常只需填写 Key，无需修改高级设置。</div> : null}
-            {editingPreset ? <Field label="对话模型"><div className="select-wrap"><select value={editing.model} onChange={e => setEditing({ ...editing, model: e.target.value })}>{Array.from(new Set([...presetModels(editingPreset, editingProtocol), editing.model])).map(model => <option key={model} value={model}>{model}</option>)}</select><ChevronDown size={14} /></div><span className="field-help">已选择默认模型，可直接保存。其他模型可在高级设置填写。</span></Field> : null}
+            {modelOptions(editingProtocol).length > 0 || modelList ? <Field label="对话模型"><div className="select-wrap"><select value={editing.model} onChange={e => setEditing({ ...editing, model: e.target.value })}>{Array.from(new Set([...modelOptions(editingProtocol), editing.model].filter(Boolean))).map(model => <option key={model} value={model}>{model}</option>)}</select><ChevronDown size={14} /></div><span className="field-help">{modelList?.loading ? "正在用当前 Key 获取模型列表…" : modelList?.error ? `获取模型列表失败：${modelList.error}${editingPreset ? "。先显示预设模型。" : ""}` : modelList && modelList.models.length > 0 ? `已从接口获取 ${modelOptions(editingProtocol).length} 个支持 ${editingProtocol === "responses" ? "Responses" : "Chat Completions"} 的模型。` : "已选择默认模型，可直接保存。"}其他模型可在高级设置填写。</span></Field> : null}
             <details className="advanced-settings" open={editingPreset ? undefined : true}><summary>高级设置 · 接口、模型与协议</summary><div className="advanced-fields">
             <Field label="供应商名称"><TextField required readOnly={editing.id === NOVAFERRY_ID} value={editing.name} onChange={(e) => setEditing({ ...editing, name: e.target.value })} /></Field>
             <Field label="完整请求地址"><TextField required readOnly={editing.id === NOVAFERRY_ID} value={editing.endpoint} spellCheck={false} onChange={(e) => setEditing({ ...editing, endpoint: e.target.value })} /><span className="field-help">填写实际接收请求的完整 URL，不是官网或 SDK 基础地址。{editing.apiProtocol === "responses" ? "通常以 /responses 结尾。" : "通常以 /chat/completions 结尾。"}</span></Field>
@@ -388,8 +417,9 @@ export default function App() {
               setError("");
               const protocol = e.target.value;
               // 换协议后当前模型不在该协议的可选列表里时，改选列表第一个
-              const models = editingPreset ? presetModels(editingPreset, protocol) : [];
-              const model = models.length > 0 && !models.includes(editing.model) ? models[0] : editing.model;
+              const models = modelOptions(protocol);
+              const preferred = editingPreset?.models.find(item => models.includes(item)) ?? models[0];
+              const model = models.length > 0 && !models.includes(editing.model) ? preferred : editing.model;
               setEditing({ ...editing, apiProtocol: protocol, model, endpoint: endpointForProtocol(editing.endpoint, protocol) });
             }}><option value="chat_completions">Chat Completions</option><option value="responses">Responses API</option></select><ChevronDown size={14} /></div><span className="field-help">切换协议会同步替换标准接口路径；自定义路径需自行核对。当前不支持 Anthropic Messages（/anthropic）。</span></Field>
             </div></details>

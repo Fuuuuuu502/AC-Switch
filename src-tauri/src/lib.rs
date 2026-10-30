@@ -1331,6 +1331,40 @@ fn delete_provider(
     Ok(config)
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ListModelsInput {
+    provider_id: Option<String>,
+    kind: String,
+    endpoint: String,
+    api_key: Option<String>,
+}
+
+// 用供应商的 Key 读取它的模型列表；新填的 Key 优先，留空时用已保存的
+#[tauri::command(async)]
+fn list_models(app: AppHandle, input: ListModelsInput) -> Result<serde_json::Value, String> {
+    let api_key = match input.api_key.map(|key| key.trim().to_string()).filter(|key| !key.is_empty()) {
+        Some(key) => key,
+        None => match input.provider_id.filter(|id| !id.is_empty()) {
+            Some(id) => secret_get(&id, &input.kind)?.unwrap_or_default(),
+            None => String::new(),
+        },
+    };
+    let node = node_compatible_path(&node_bin(&app)?);
+    let script = node_compatible_path(&sidecar_dir(&app)?.join("list-models.cjs"));
+    let output = command(&node)
+        .env_remove("NODE_OPTIONS")
+        .env_remove("NODE_PATH")
+        .env("LIST_MODELS_ENDPOINT", input.endpoint.trim())
+        .env("LIST_MODELS_API_KEY", api_key)
+        .arg(&script)
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .output()
+        .map_err(|e| e.to_string())?;
+    serde_json::from_slice(&output.stdout).map_err(|_| "读取模型列表失败".to_string())
+}
+
 fn curl_json(url: &str) -> Option<serde_json::Value> {
     serde_json::from_slice(&local_http_body(url)?).ok()
 }
@@ -1588,7 +1622,8 @@ pub fn run() {
             delete_provider,
             get_status,
             apply_provider,
-            restart_accio
+            restart_accio,
+            list_models
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

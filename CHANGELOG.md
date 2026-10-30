@@ -4,6 +4,7 @@
 
 - 修复用 Claude 模型时报 `This model does not support assistant message prefill`：Accio 的对话以模型消息结尾时，补一条用户消息「Continue.」让模型接着回答；带工具调用的消息和正常以用户消息结尾的对话不受影响。出现这种情况时模型桥日志会记下各消息的角色顺序。
 - 切到 Responses 协议后仍能识别预设，模型下拉框不再消失；Novaferry 在 Responses 下只列出支持该协议的 GPT 模型（Claude 只支持 Chat Completions），并修正「一个 Key 调用全部模型」的说明：令牌分组需选 auto。
+- 模型下拉框改为用当前 Key 向供应商读取可用模型（`/models` 接口），按所选协议筛选（如 Novaferry 的 Claude 只出现在 Chat Completions 下）；读取失败时退回预设列表，并在下方显示原因。
 
 ## 0.1.8 — 2026-10-30
 
