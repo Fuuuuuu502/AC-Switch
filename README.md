@@ -43,7 +43,7 @@ Accio Desktop 默认只能用官方积分模型。AC-Switch 让它改用你自�
 
 | 供应商 | 说明 |
 |---|---|
-| **[Novaferry](https://novaferry.com/)** | 内置，一个 Key 调用 GPT 和 Claude 系列模型 |
+| **[Novaferry](https://novaferry.com/)** | 内置。令牌分组选 auto 后一个 Key 调用 GPT 和 Claude；Claude 只支持 Chat Completions |
 | OpenCode Go | DeepSeek 系列 |
 | OpenAI | GPT 系列 |
 | DeepSeek | DeepSeek 开放平台 |

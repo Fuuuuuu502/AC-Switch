@@ -1,5 +1,10 @@
 # 版本记录
 
+## 0.1.9 — 2026-10-30
+
+- 修复用 Claude 模型时报 `This model does not support assistant message prefill`：Accio 的对话以模型消息结尾时，补一条用户消息「Continue.」让模型接着回答；带工具调用的消息和正常以用户消息结尾的对话不受影响。出现这种情况时模型桥日志会记下各消息的角色顺序。
+- 切到 Responses 协议后仍能识别预设，模型下拉框不再消失；Novaferry 在 Responses 下只列出支持该协议的 GPT 模型（Claude 只支持 Chat Completions），并修正「一个 Key 调用全部模型」的说明：令牌分组需选 auto。
+
 ## 0.1.8 — 2026-10-30
 
 - 修复用 Claude 模型时报 `input_schema does not support oneOf, allOf, or anyOf at the top level`：发给上游前，把工具参数顶层的 oneOf / anyOf / allOf 合并成普通对象，「几组字段选一组」的约束写进参数说明。OpenAI 等接口不受影响。

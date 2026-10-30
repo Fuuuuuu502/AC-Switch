@@ -154,7 +154,11 @@ export default function App() {
   const [editing, setEditing] = useState<(Provider & { apiKey: string }) | null>(null);
   const [editingImage, setEditingImage] = useState<(ImageChannel & { apiKey: string }) | null>(null);
   const [choosingProvider, setChoosingProvider] = useState(false);
-  const editingPreset = presets.find(p => p.endpoint === editing?.endpoint && editing?.apiProtocol === "chat_completions");
+  // 按 Chat Completions 地址匹配预设，切到 Responses 后仍认得出是哪家
+  const editingPreset = editing ? presets.find(p => p.endpoint === endpointForProtocol(editing.endpoint, "chat_completions")) : undefined;
+  const editingProtocol = editing?.apiProtocol || "chat_completions";
+  const presetModels = (preset: (typeof presets)[number], protocol: string) =>
+    protocol === "responses" && "responsesModels" in preset && Array.isArray(preset.responsesModels) ? preset.responsesModels : preset.models;
   const [pendingDelete, setPendingDelete] = useState("");
 
   const providers = useMemo(() => [OFFICIAL, ...(config?.providers || [])], [config]);
@@ -374,13 +378,20 @@ export default function App() {
           <div className="modal-fields">
             {error ? <div className="notice notice-error" role="alert"><AlertCircle size={16} /><p>{error}</p></div> : null}
             <Field label="API Key"><TextField required={Boolean(editingPreset && !editing.hasKey)} type="password" autoComplete="off" value={editing.apiKey} placeholder={editing.hasKey ? "已保存 · 留空保持不变" : "sk-..."} onChange={(e) => setEditing({ ...editing, apiKey: e.target.value })} /><span className="field-help">{editingPreset ? "填写所选平台的 API Key。" : "本地模型可留空。"}已有凭据留空不会修改。{editing.id === NOVAFERRY_ID ? <> 还没有 Key？<button type="button" className="inline-link" onClick={() => run("open-home", () => openUrl(NOVAFERRY_HOME))}>前往 Novaferry 官网</button></> : null}</span></Field>
-            {editingPreset ? <div className="form-note"><Info size={14} />已匹配 Chat Completions 协议和完整请求地址，通常只需填写 Key，无需修改高级设置。</div> : null}
-            {editingPreset ? <Field label="对话模型"><div className="select-wrap"><select value={editing.model} onChange={e => setEditing({ ...editing, model: e.target.value })}>{Array.from(new Set([...editingPreset.models, editing.model])).map(model => <option key={model} value={model}>{model}</option>)}</select><ChevronDown size={14} /></div><span className="field-help">已选择默认模型，可直接保存。其他模型可在高级设置填写。</span></Field> : null}
+            {editingPreset ? <div className="form-note"><Info size={14} />已匹配 {editingProtocol === "responses" ? "Responses" : "Chat Completions"} 协议和完整请求地址，通常只需填写 Key，无需修改高级设置。</div> : null}
+            {editingPreset ? <Field label="对话模型"><div className="select-wrap"><select value={editing.model} onChange={e => setEditing({ ...editing, model: e.target.value })}>{Array.from(new Set([...presetModels(editingPreset, editingProtocol), editing.model])).map(model => <option key={model} value={model}>{model}</option>)}</select><ChevronDown size={14} /></div><span className="field-help">已选择默认模型，可直接保存。其他模型可在高级设置填写。</span></Field> : null}
             <details className="advanced-settings" open={editingPreset ? undefined : true}><summary>高级设置 · 接口、模型与协议</summary><div className="advanced-fields">
             <Field label="供应商名称"><TextField required readOnly={editing.id === NOVAFERRY_ID} value={editing.name} onChange={(e) => setEditing({ ...editing, name: e.target.value })} /></Field>
             <Field label="完整请求地址"><TextField required readOnly={editing.id === NOVAFERRY_ID} value={editing.endpoint} spellCheck={false} onChange={(e) => setEditing({ ...editing, endpoint: e.target.value })} /><span className="field-help">填写实际接收请求的完整 URL，不是官网或 SDK 基础地址。{editing.apiProtocol === "responses" ? "通常以 /responses 结尾。" : "通常以 /chat/completions 结尾。"}</span></Field>
             <div className="form-columns"><Field label="模型名称"><TextField required value={editing.model} onChange={(e) => setEditing({ ...editing, model: e.target.value })} /></Field><Field label="思考强度"><div className="select-wrap"><select value={editing.reasoningEffort} onChange={(e) => setEditing({ ...editing, reasoningEffort: e.target.value })}>{Array.from(new Set([...(editingPreset?.efforts || ["disabled", "low", "medium", "high", "xhigh", "max"]), editing.reasoningEffort])).map(item => <option key={item} value={item}>{EFFORT_LABEL[item] || item}</option>)}</select><ChevronDown size={14} /></div><span className="field-help">可用强度取决于模型和代理支持；极高、最强通常需要更长时间和更多额度。</span></Field></div>
-            <Field label="对话协议"><div className="select-wrap"><select value={editing.apiProtocol || "chat_completions"} onChange={(e) => { setError(""); setEditing({ ...editing, apiProtocol: e.target.value, endpoint: endpointForProtocol(editing.endpoint, e.target.value) }); }}><option value="chat_completions">Chat Completions</option><option value="responses">Responses API</option></select><ChevronDown size={14} /></div><span className="field-help">切换协议会同步替换标准接口路径；自定义路径需自行核对。当前不支持 Anthropic Messages（/anthropic）。</span></Field>
+            <Field label="对话协议"><div className="select-wrap"><select value={editing.apiProtocol || "chat_completions"} onChange={(e) => {
+              setError("");
+              const protocol = e.target.value;
+              // 换协议后当前模型不在该协议的可选列表里时，改选列表第一个
+              const models = editingPreset ? presetModels(editingPreset, protocol) : [];
+              const model = models.length > 0 && !models.includes(editing.model) ? models[0] : editing.model;
+              setEditing({ ...editing, apiProtocol: protocol, model, endpoint: endpointForProtocol(editing.endpoint, protocol) });
+            }}><option value="chat_completions">Chat Completions</option><option value="responses">Responses API</option></select><ChevronDown size={14} /></div><span className="field-help">切换协议会同步替换标准接口路径；自定义路径需自行核对。当前不支持 Anthropic Messages（/anthropic）。</span></Field>
             </div></details>
             <div className="form-note"><Info size={14} />保存当前供应商后，模型与思考设置会立即应用。</div>
           </div><div className="modal-footer"><button type="button" className="button button-secondary" disabled={busy} onClick={() => setEditing(null)}>取消</button><button className="button button-primary" disabled={busy}>{busyAction === "save" ? <Loader2 size={15} className="spin" /> : <Check size={15} />}保存供应商</button></div>

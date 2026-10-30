@@ -134,6 +134,12 @@ function messagesFromContents(contents) {
       });
     }
   }
+  // Claude 等模型不支持「预填回复」，对话必须以用户消息结尾；Accio 有时以模型消息收尾，补一句让模型接着说
+  const last = messages.at(-1);
+  if (last?.role === "assistant" && !last.tool_calls) {
+    console.error(`trailing assistant message, appended user turn; roles=${messages.map((message) => message.role).join(",")}`);
+    messages.push({ role: "user", content: "Continue." });
+  }
   return messages;
 }
 

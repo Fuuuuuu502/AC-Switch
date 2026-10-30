@@ -1,6 +1,6 @@
 [package]
 name = "ac-switch"
-version = "0.1.8"
+version = "0.1.9"
 description = "Accio model router"
 authors = ["Fuuuuuu502"]
 license = "AGPL-3.0-only"

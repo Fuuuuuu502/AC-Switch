@@ -283,6 +283,34 @@ for (const protocol of ['chat_completions', 'responses']) {
   });
 }
 
+for (const protocol of ['chat_completions', 'responses']) {
+  test(`${protocol} never ends the conversation with an assistant message`, async t => {
+    const inputs = [];
+    const upstream = await server(t, async (req, res) => {
+      inputs.push(JSON.parse(await body(req)));
+      res.setHeader('Content-Type', 'text/event-stream');
+      if (protocol === 'responses') {
+        event(res, 'response.output_text.delta', { delta: 'ok' });
+        event(res, 'response.completed', { response: { status: 'completed' } });
+        res.end();
+      } else {
+        chat(res, { content: 'ok' }, 'stop'); res.end('data: [DONE]\n\n');
+      }
+    });
+    const model = await bridge(t, upstream, { ACCIO_API_PROTOCOL: protocol });
+    const contents = [{ role: 'user', parts: [{ text: 'hi' }] }, { role: 'model', parts: [{ text: 'partial answer' }] }];
+    frames(await post(model, { contents }));
+    const sent = protocol === 'responses' ? inputs[0].input : inputs[0].messages;
+    assert.deepEqual(sent.at(-1), { role: 'user', content: 'Continue.' });
+    assert.equal(sent.at(-2).role, 'assistant');
+    // 正常以用户消息结尾时不改动
+    frames(await post(model, { contents: [{ role: 'user', parts: [{ text: 'hi' }] }] }));
+    const plain = protocol === 'responses' ? inputs[1].input : inputs[1].messages;
+    assert.equal(plain.length, 1);
+    assert.equal(plain[0].content, 'hi');
+  });
+}
+
 test('relay serves Accio 0.36 v3 model cache and reports last client request', async t => {
   const temp = await mkdtemp(path.join(os.tmpdir(), 'accio-cache-test-'));
   t.after(() => rm(temp, { recursive: true, force: true }));
