@@ -1,5 +1,9 @@
 # 版本记录
 
+## 0.1.8 — 2026-10-30
+
+- 修复用 Claude 模型时报 `input_schema does not support oneOf, allOf, or anyOf at the top level`：发给上游前，把工具参数顶层的 oneOf / anyOf / allOf 合并成普通对象，「几组字段选一组」的约束写进参数说明。OpenAI 等接口不受影响。
+
 ## 0.1.7 — 2026-10-30
 
 - 适配 Accio 0.36：读取新版（v3）模型缓存，模型列表重新显示当前实际使用的模型，不再退回官方目录。

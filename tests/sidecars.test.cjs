@@ -240,6 +240,49 @@ test('relay official/custom/default/local routing and catalog fallback body', as
   }
 });
 
+for (const protocol of ['chat_completions', 'responses']) {
+  test(`${protocol} flattens top-level oneOf/anyOf/allOf tool schemas for Claude`, async t => {
+    const inputs = [];
+    const upstream = await server(t, async (req, res) => {
+      inputs.push(JSON.parse(await body(req)));
+      res.setHeader('Content-Type', 'text/event-stream');
+      if (protocol === 'responses') {
+        event(res, 'response.output_text.delta', { delta: 'ok' });
+        event(res, 'response.completed', { response: { status: 'completed' } });
+        res.end();
+      } else {
+        chat(res, { content: 'ok' }, 'stop'); res.end('data: [DONE]\n\n');
+      }
+    });
+    const model = await bridge(t, upstream, { ACCIO_API_PROTOCOL: protocol });
+    const oneOf = { description: 'Look up a product.', oneOf: [
+      { type: 'object', properties: { id: { type: 'string' }, region: { type: 'string' } }, required: ['id', 'region'] },
+      { type: 'object', properties: { url: { type: 'string' }, region: { type: 'string' } }, required: ['url', 'region'] },
+    ] };
+    const allOf = { allOf: [
+      { type: 'object', properties: { a: { type: 'string' } }, required: ['a'] },
+      { type: 'object', properties: { b: { type: 'number' } }, required: ['b'] },
+    ] };
+    const plain = { type: 'object', properties: { q: { type: 'string' } }, required: ['q'] };
+    const tools = [{ functionDeclarations: [
+      { name: 'lookup', description: 'lookup', parametersJson: JSON.stringify(oneOf) },
+      { name: 'merge', description: 'merge', parameters: allOf },
+      { name: 'plain', description: 'plain', parameters: plain },
+    ] }];
+    frames(await post(model, { ...payload, tools }));
+    const sent = protocol === 'responses' ? inputs[0].tools.map(tool => tool.parameters) : inputs[0].tools.map(tool => tool.function.parameters);
+    for (const schema of sent) {
+      assert.equal(schema.type, 'object');
+      for (const key of ['oneOf', 'anyOf', 'allOf']) assert.equal(schema[key], undefined);
+    }
+    assert.deepEqual(Object.keys(sent[0].properties).sort(), ['id', 'region', 'url']);
+    assert.deepEqual(sent[0].required, ['region']);
+    assert.match(sent[0].description, /Look up a product\. Provide exactly one of these field sets: id \+ region \| url \+ region\./);
+    assert.deepEqual(sent[1].required, ['a', 'b']);
+    assert.deepEqual(sent[2], plain);
+  });
+}
+
 test('relay serves Accio 0.36 v3 model cache and reports last client request', async t => {
   const temp = await mkdtemp(path.join(os.tmpdir(), 'accio-cache-test-'));
   t.after(() => rm(temp, { recursive: true, force: true }));

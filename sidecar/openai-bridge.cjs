@@ -147,12 +147,59 @@ function systemMessage(instruction) {
   return null;
 }
 
+const SCHEMA_COMBINATORS = ["oneOf", "anyOf", "allOf"];
+
+function isPlainObject(value) {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+// Claude 接口要求工具参数顶层是普通对象，不接受 oneOf / anyOf / allOf（OpenAI 接受）。
+// 把各分支的字段合并进同一个对象：allOf 的必填项取并集，oneOf / anyOf 取交集，
+// 「几组字段选一组」的约束写进 description，让模型照着填。
+function flattenToolSchema(schema) {
+  if (!isPlainObject(schema)) return { type: "object", properties: {} };
+  if (!SCHEMA_COMBINATORS.some((key) => Array.isArray(schema[key]))) {
+    return schema.type === undefined ? { ...schema, type: "object" } : schema;
+  }
+  const flattened = { ...schema };
+  const properties = isPlainObject(schema.properties) ? { ...schema.properties } : {};
+  let required = Array.isArray(schema.required) ? [...schema.required] : [];
+  const notes = [];
+  for (const key of SCHEMA_COMBINATORS) {
+    delete flattened[key];
+    if (!Array.isArray(schema[key])) continue;
+    const branches = schema[key].filter(isPlainObject).map(flattenToolSchema);
+    for (const branch of branches) {
+      for (const [name, value] of Object.entries(isPlainObject(branch.properties) ? branch.properties : {})) {
+        if (!(name in properties)) properties[name] = value;
+      }
+    }
+    const branchRequired = branches.map((branch) => (Array.isArray(branch.required) ? branch.required : []));
+    if (key === "allOf") {
+      required = required.concat(...branchRequired);
+    } else if (branchRequired.length > 0) {
+      required = required.concat(branchRequired.reduce((common, list) => common.filter((name) => list.includes(name))));
+      const options = branchRequired.filter((list) => list.length > 0).map((list) => list.join(" + "));
+      if (options.length > 1) notes.push(`Provide exactly one of these field sets: ${options.join(" | ")}.`);
+    }
+  }
+  flattened.type = "object";
+  flattened.properties = properties;
+  required = [...new Set(required)].filter((name) => name in properties);
+  if (required.length > 0) flattened.required = required;
+  else delete flattened.required;
+  if (notes.length > 0) {
+    flattened.description = [flattened.description, ...notes].filter(Boolean).join(" ");
+  }
+  return flattened;
+}
+
 function normalizeToolDeclaration(declaration) {
   const functionDeclaration = declaration?.function ?? declaration?.functionDeclaration ?? declaration?.function_declaration ?? declaration;
-  const parameters = parseJson(
+  const parameters = flattenToolSchema(parseJson(
     functionDeclaration?.parameters ?? functionDeclaration?.parametersJson ?? functionDeclaration?.parameters_json,
     { type: "object", properties: {} },
-  );
+  ));
   if (!functionDeclaration?.name) return null;
   return {
     type: "function",
