@@ -763,30 +763,6 @@ async function proxy(request, response, payload) {
   if (!auth) return;
   const stopKeepalive = startKeepalive(response);
   const upstreamRequest = toOpenAiRequest(payload);
-  let upstream;
-  try {
-    upstream = await fetch(ENDPOINT, {
-      method: "POST",
-      headers: authHeaders({ Accept: "text/event-stream" }),
-      body: JSON.stringify(upstreamRequest),
-      signal: request.signal,
-    });
-  } catch (error) {
-    stopKeepalive();
-    errorFrame(response, "UPSTREAM_NETWORK", error?.message || String(error));
-    return;
-  }
-  if (!upstream.ok) {
-    stopKeepalive();
-    await handleUpstreamError(response, upstream, auth.authorizationAttached, ENDPOINT);
-    return;
-  }
-  if (!upstream.body) {
-    stopKeepalive();
-    errorFrame(response, "UPSTREAM_EMPTY", "Model API returned an empty response body");
-    return;
-  }
-
   const toolCalls = new Map();
   let sawOutput = false;
   let responseId;
@@ -794,54 +770,95 @@ async function proxy(request, response, payload) {
   let finishReason;
   let reasoningContent = "";
   let responseModel = MODEL;
-  try {
-  for await (const data of sseData(upstream.body)) {
-    if (data === "[DONE]") continue;
-    let chunk;
+  // 代理或网络中途断开（undici 报 terminated）时，只要还没给 Accio 发过正文，就自动重试一次；
+  // 工具调用要等完整收到才发给 Accio，所以重试不会重复执行工具
+  for (let attempt = 1; ; attempt += 1) {
+    const startedAt = Date.now();
+    let lastByteAt = startedAt;
+    let upstream;
     try {
-      chunk = JSON.parse(data);
-    } catch {
-      continue;
-    }
-    responseId ||= chunk.id;
-    if (typeof chunk.model === "string" && chunk.model.trim()) {
-      responseModel = chunk.model.trim();
-      resolvedModel = responseModel;
-    }
-    usage ||= usageMetadata(chunk.usage);
-    const choice = chunk.choices?.[0];
-    const delta = choice?.delta;
-    finishReason ||= choice?.finish_reason;
-    if (typeof delta?.reasoning_content === "string" && delta.reasoning_content.length > 0) {
-      reasoningContent += delta.reasoning_content;
-      sendFrame(response, {
-        content: { role: "model", parts: [{ text: delta.reasoning_content, thought: true }] },
-        partial: true,
-        turnComplete: false,
-        customMetadata: { provider: API_PROVIDER, model: responseModel, reasoning_effort: REASONING_MODE, response_id: responseId },
+      upstream = await fetch(ENDPOINT, {
+        method: "POST",
+        headers: authHeaders({ Accept: "text/event-stream" }),
+        body: JSON.stringify(upstreamRequest),
+        signal: request.signal,
       });
+    } catch (error) {
+      stopKeepalive();
+      errorFrame(response, "UPSTREAM_NETWORK", error?.message || String(error));
+      return;
     }
-    if (typeof delta?.content === "string" && delta.content.length > 0) {
-      sawOutput = true;
-      sendFrame(response, {
-        content: { role: "model", parts: [{ text: delta.content }] },
-        partial: true,
-        turnComplete: false,
-        customMetadata: { provider: API_PROVIDER, model: responseModel, reasoning_effort: REASONING_MODE, response_id: responseId },
-      });
+    if (!upstream.ok) {
+      stopKeepalive();
+      await handleUpstreamError(response, upstream, auth.authorizationAttached, ENDPOINT);
+      return;
     }
-    for (const call of Array.isArray(delta?.tool_calls) ? delta.tool_calls : []) {
-      const index = call.index ?? toolCalls.size;
-      const current = toolCalls.get(index) || { id: "", name: "", arguments: "" };
-      if (call.id) current.id = call.id;
-      if (call.function?.name) current.name += call.function.name;
-      if (call.function?.arguments) current.arguments += call.function.arguments;
-      toolCalls.set(index, current);
+    if (!upstream.body) {
+      stopKeepalive();
+      errorFrame(response, "UPSTREAM_EMPTY", "Model API returned an empty response body");
+      return;
+    }
+    toolCalls.clear();
+    reasoningContent = "";
+    finishReason = undefined;
+    try {
+      for await (const data of sseData(upstream.body)) {
+        lastByteAt = Date.now();
+        if (data === "[DONE]") continue;
+        let chunk;
+        try {
+          chunk = JSON.parse(data);
+        } catch {
+          continue;
+        }
+        responseId ||= chunk.id;
+        if (typeof chunk.model === "string" && chunk.model.trim()) {
+          responseModel = chunk.model.trim();
+          resolvedModel = responseModel;
+        }
+        usage ||= usageMetadata(chunk.usage);
+        const choice = chunk.choices?.[0];
+        const delta = choice?.delta;
+        finishReason ||= choice?.finish_reason;
+        if (typeof delta?.reasoning_content === "string" && delta.reasoning_content.length > 0) {
+          reasoningContent += delta.reasoning_content;
+          sendFrame(response, {
+            content: { role: "model", parts: [{ text: delta.reasoning_content, thought: true }] },
+            partial: true,
+            turnComplete: false,
+            customMetadata: { provider: API_PROVIDER, model: responseModel, reasoning_effort: REASONING_MODE, response_id: responseId },
+          });
+        }
+        if (typeof delta?.content === "string" && delta.content.length > 0) {
+          sawOutput = true;
+          sendFrame(response, {
+            content: { role: "model", parts: [{ text: delta.content }] },
+            partial: true,
+            turnComplete: false,
+            customMetadata: { provider: API_PROVIDER, model: responseModel, reasoning_effort: REASONING_MODE, response_id: responseId },
+          });
+        }
+        for (const call of Array.isArray(delta?.tool_calls) ? delta.tool_calls : []) {
+          const index = call.index ?? toolCalls.size;
+          const current = toolCalls.get(index) || { id: "", name: "", arguments: "" };
+          if (call.id) current.id = call.id;
+          if (call.function?.name) current.name += call.function.name;
+          if (call.function?.arguments) current.arguments += call.function.arguments;
+          toolCalls.set(index, current);
+        }
+      }
+      break;
+    } catch (error) {
+      const seconds = ((Date.now() - startedAt) / 1000).toFixed(1);
+      const idle = ((Date.now() - lastByteAt) / 1000).toFixed(1);
+      console.error(`upstream stream interrupted attempt=${attempt} after=${seconds}s idle=${idle}s sawOutput=${sawOutput} error=${error?.message || String(error)}`);
+      if (request.signal?.aborted || sawOutput || attempt >= 2) {
+        stopKeepalive();
+        throw new Error(`${error?.message || String(error)}（与模型接口的连接在 ${seconds} 秒时中断，已空闲 ${idle} 秒；常见原因是代理节点切断长时间无数据的连接）`);
+      }
     }
   }
-  } finally {
-    stopKeepalive();
-  }
+  stopKeepalive();
   const parts = [...toolCalls.values()].map((call) => ({
     functionCall: {
       id: call.id,

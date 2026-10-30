@@ -311,6 +311,36 @@ for (const protocol of ['chat_completions', 'responses']) {
   });
 }
 
+test('chat stream cut before any text is retried once', async t => {
+  let calls = 0;
+  const upstream = await server(t, async (req, res) => {
+    await body(req); calls += 1;
+    res.setHeader('Content-Type', 'text/event-stream');
+    if (calls === 1) { chat(res, { reasoning_content: 'thinking' }); setTimeout(() => res.socket.destroy(), 50); return; }
+    chat(res, { content: 'second try' }, 'stop'); res.end('data: [DONE]\n\n');
+  });
+  const model = await bridge(t, upstream);
+  const result = frames(await post(model));
+  assert.equal(calls, 2);
+  assert.ok(result.every(frame => !frame.errorCode), JSON.stringify(result));
+  assert.ok(result.some(frame => frame.content?.parts?.[0]?.text === 'second try'));
+  assert.equal(result.at(-1).turnComplete, true);
+});
+
+test('chat stream cut after text is reported, not retried', async t => {
+  let calls = 0;
+  const upstream = await server(t, async (req, res) => {
+    await body(req); calls += 1;
+    res.setHeader('Content-Type', 'text/event-stream');
+    chat(res, { content: 'partial' }); setTimeout(() => res.socket.destroy(), 50);
+  });
+  const model = await bridge(t, upstream);
+  const result = frames(await post(model));
+  assert.equal(calls, 1);
+  assert.equal(result.at(-1).errorCode, 'ADAPTER_REQUEST');
+  assert.match(result.at(-1).errorMessage, /中断/);
+});
+
 test('relay serves Accio 0.36 v3 model cache and reports last client request', async t => {
   const temp = await mkdtemp(path.join(os.tmpdir(), 'accio-cache-test-'));
   t.after(() => rm(temp, { recursive: true, force: true }));
