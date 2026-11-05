@@ -1,5 +1,10 @@
 # 版本记录
 
+## 0.1.10 — 2026-11-05
+
+- 修复 Windows 版提示「未找到 Windows Accio」：改为依次从正在运行的 Accio、常见安装目录（含 Accio Work 等名称）和系统已安装程序列表里查找，不再要求程序名必须是 `Accio.exe`；找到后记住路径。检测 Accio 是否运行、退出 Accio 时也按实际程序名判断。
+- `AC_SWITCH_ACCIO_PATH` 可以指向任意名称的 Accio 程序（.exe）。
+
 ## 0.1.9 — 2026-10-30
 
 - 修复用 Claude 模型时报 `This model does not support assistant message prefill`：Accio 的对话以模型消息结尾时，补一条用户消息「Continue.」让模型接着回答；带工具调用的消息和正常以用户消息结尾的对话不受影响。出现这种情况时模型桥日志会记下各消息的角色顺序。

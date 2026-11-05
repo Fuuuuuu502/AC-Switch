@@ -29,55 +29,103 @@ fn join_components(mut path: PathBuf, components: &[&str]) -> PathBuf {
     path
 }
 
+// Accio 主程序：名字以 Accio 开头的 .exe（Accio.exe、Accio Work.exe 等），旁边有 Electron 的 resources\app.asar
+fn is_accio_exe(path: &Path) -> bool {
+    let Some(name) = path.file_name().map(|n| n.to_string_lossy().to_lowercase()) else {
+        return false;
+    };
+    name.starts_with("accio")
+        && name.ends_with(".exe")
+        && !["helper", "uninstall", "update"].iter().any(|word| name.contains(word))
+        && path.is_file()
+        && path.parent().is_some_and(|dir| dir.join("resources").join("app.asar").is_file())
+}
+
+static ACCIO_EXE: Mutex<Option<PathBuf>> = Mutex::new(None);
+const ACCIO_PATH_FILE: &str = "accio-path.txt";
+
+fn remember_accio_exe(path: &Path) {
+    if let Ok(mut cached) = ACCIO_EXE.lock() {
+        *cached = Some(path.to_path_buf());
+    }
+    if let Ok(dir) = config_dir() {
+        let _ = fs::write(dir.join(ACCIO_PATH_FILE), path.to_string_lossy().as_bytes());
+    }
+}
+
+// 依次找：用户指定 → 上次找到的 → 正在运行的 Accio → 常见安装目录 → 注册表里的已安装程序
 pub(super) fn accio_exe() -> Result<PathBuf, String> {
     if let Some(path) = std::env::var_os("AC_SWITCH_ACCIO_PATH") {
         let path = PathBuf::from(path);
-        if path.is_file()
-            && path
-                .file_name()
-                .is_some_and(|n| n.to_string_lossy().eq_ignore_ascii_case("Accio.exe"))
-        {
+        let is_exe = path
+            .extension()
+            .is_some_and(|ext| ext.to_string_lossy().eq_ignore_ascii_case("exe"));
+        if path.is_file() && is_exe {
             return Ok(path);
         }
-        return Err("AC_SWITCH_ACCIO_PATH 必须指向已安装的 Accio.exe。".into());
+        return Err("AC_SWITCH_ACCIO_PATH 必须指向已安装的 Accio 程序（.exe 文件）。".into());
     }
-    for (base, components) in [
-        ("LOCALAPPDATA", &["Programs", "Accio", "Accio.exe"][..]),
-        ("LOCALAPPDATA", &["Accio", "Accio.exe"][..]),
-        ("ProgramFiles", &["Accio", "Accio.exe"][..]),
-        ("ProgramFiles(x86)", &["Accio", "Accio.exe"][..]),
-    ] {
-        if let Some(base) = std::env::var_os(base) {
-            let path = join_components(PathBuf::from(base), components);
-            if path.is_file() {
-                return Ok(path);
-            }
+    if let Some(path) = ACCIO_EXE.lock().ok().and_then(|cached| cached.clone()) {
+        if is_accio_exe(&path) {
+            return Ok(path);
+        }
+    }
+    if let Some(path) = config_dir()
+        .ok()
+        .and_then(|dir| fs::read_to_string(dir.join(ACCIO_PATH_FILE)).ok())
+        .map(|value| PathBuf::from(value.trim()))
+    {
+        if is_accio_exe(&path) {
+            remember_accio_exe(&path);
+            return Ok(path);
         }
     }
     let value = output(powershell(
         r#"
+function Test-Accio($exe) { $exe -and (Test-Path -LiteralPath $exe -PathType Leaf) -and (Test-Path -LiteralPath (Join-Path (Split-Path $exe) 'resources\app.asar') -PathType Leaf) }
+function Find-InDir($dir) {
+  if(-not $dir -or -not (Test-Path -LiteralPath $dir -PathType Container)) { return $null }
+  $files=@(Get-ChildItem -LiteralPath $dir -Filter 'Accio*.exe' -File -ErrorAction SilentlyContinue | Where-Object { $_.Name -notmatch 'helper|uninstall|update' } | Sort-Object { $_.Name.Length })
+  foreach($f in $files) { if(Test-Accio $f.FullName) { return $f.FullName } }
+  return $null
+}
+foreach($p in @(Get-CimInstance Win32_Process -Filter "Name LIKE 'Accio%.exe'" -ErrorAction SilentlyContinue | Where-Object { $_.Name -notmatch 'helper|uninstall|update' })) {
+  if(Test-Accio $p.ExecutablePath) { [Console]::Write($p.ExecutablePath); exit 0 }
+}
+$bases=@($env:LOCALAPPDATA, (Join-Path $env:LOCALAPPDATA 'Programs'), $env:ProgramFiles, ${env:ProgramFiles(x86)}) | Where-Object { $_ }
+foreach($base in $bases) {
+  foreach($dir in @(Get-ChildItem -LiteralPath $base -Directory -Filter 'Accio*' -ErrorAction SilentlyContinue)) {
+    $found=Find-InDir $dir.FullName; if($found) { [Console]::Write($found); exit 0 }
+  }
+}
 $roots=@('HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*','HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*','HKLM:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*')
 foreach($root in $roots) {
-  foreach($item in @(Get-ItemProperty $root -ErrorAction SilentlyContinue | Where-Object { $_.DisplayName -eq 'Accio' })) {
-    if($item.InstallLocation) {
-      $candidate=Join-Path $item.InstallLocation 'Accio.exe'
-      if(Test-Path -LiteralPath $candidate -PathType Leaf) { [Console]::Write($candidate); exit 0 }
-    }
+  foreach($item in @(Get-ItemProperty $root -ErrorAction SilentlyContinue | Where-Object { $_.DisplayName -like 'Accio*' })) {
+    $dirs=@($item.InstallLocation)
+    if($item.DisplayIcon) { $dirs+=Split-Path (($item.DisplayIcon -split ',')[0].Trim('"')) }
+    foreach($dir in $dirs) { $found=Find-InDir $dir; if($found) { [Console]::Write($found); exit 0 } }
   }
 }
 "#,
     ))?;
-    if !value.is_empty() && Path::new(&value).is_file() {
-        return Ok(PathBuf::from(value));
+    let path = PathBuf::from(value.trim());
+    if !value.trim().is_empty() && is_accio_exe(&path) {
+        remember_accio_exe(&path);
+        return Ok(path);
     }
-    Err("未找到 Windows Accio。请先安装；自定义安装位置可通过 AC_SWITCH_ACCIO_PATH 指定 Accio.exe。".into())
+    Err("未找到 Windows 版 Accio。请先安装并打开一次 Accio，再点「刷新」；装在其他位置时可用环境变量 AC_SWITCH_ACCIO_PATH 指定 Accio 程序（.exe）。".into())
 }
 
 fn accio_command(script: &str) -> Result<Command, String> {
+    let exe = accio_exe()?;
+    let name = exe
+        .file_name()
+        .map(|n| n.to_string_lossy().replace('\'', "''"))
+        .unwrap_or_else(|| "Accio.exe".into());
     let mut cmd = powershell(&format!(
-        r#"$accioProcesses=@(Get-CimInstance Win32_Process -Filter "Name='Accio.exe'" | Where-Object {{ $_.ExecutablePath -eq $env:AC_SWITCH_EXE }}); {script}"#
+        r#"$accioProcesses=@(Get-CimInstance Win32_Process -Filter "Name='{name}'" | Where-Object {{ $_.ExecutablePath -eq $env:AC_SWITCH_EXE }}); {script}"#
     ));
-    cmd.env("AC_SWITCH_EXE", accio_exe()?);
+    cmd.env("AC_SWITCH_EXE", &exe).env("AC_SWITCH_EXE_NAME", exe.file_name().unwrap_or_default());
     Ok(cmd)
 }
 
@@ -96,7 +144,7 @@ foreach($p in $accioProcesses) {
 }
 $deadline=[DateTime]::UtcNow.AddSeconds(8)
 do {
-  $remaining=@(Get-CimInstance Win32_Process -Filter "Name='Accio.exe'" | Where-Object { $_.ExecutablePath -eq $env:AC_SWITCH_EXE })
+  $remaining=@(Get-CimInstance Win32_Process -Filter ("Name='" + $env:AC_SWITCH_EXE_NAME + "'") | Where-Object { $_.ExecutablePath -eq $env:AC_SWITCH_EXE })
   if($remaining.Count -eq 0) { exit 0 }
   Start-Sleep -Milliseconds 200
 } while([DateTime]::UtcNow -lt $deadline)
@@ -105,7 +153,7 @@ foreach($p in $remaining) {
 }
 $forceDeadline=[DateTime]::UtcNow.AddSeconds(3)
 do {
-  $remaining=@(Get-CimInstance Win32_Process -Filter "Name='Accio.exe'" | Where-Object { $_.ExecutablePath -eq $env:AC_SWITCH_EXE })
+  $remaining=@(Get-CimInstance Win32_Process -Filter ("Name='" + $env:AC_SWITCH_EXE_NAME + "'") | Where-Object { $_.ExecutablePath -eq $env:AC_SWITCH_EXE })
   if($remaining.Count -eq 0) { exit 0 }
   Start-Sleep -Milliseconds 100
 } while([DateTime]::UtcNow -lt $forceDeadline)
@@ -249,6 +297,24 @@ mod tests {
             PathBuf::from(r"C:\Users\Example\AppData\Local\Programs\Accio\Accio.exe")
         );
         assert!(!path.to_string_lossy().contains('/'));
+    }
+
+    #[test]
+    fn accio_exe_accepts_renamed_builds_but_not_helpers() {
+        let dir = std::env::temp_dir().join(format!("accio-exe-{}", Uuid::new_v4()));
+        fs::create_dir_all(dir.join("resources")).unwrap();
+        fs::write(dir.join("resources").join("app.asar"), b"asar").unwrap();
+        for name in ["Accio.exe", "Accio Work.exe", "Accio Helper.exe", "Uninstall Accio.exe", "Other.exe"] {
+            fs::write(dir.join(name), b"exe").unwrap();
+        }
+        assert!(is_accio_exe(&dir.join("Accio.exe")));
+        assert!(is_accio_exe(&dir.join("Accio Work.exe")));
+        assert!(!is_accio_exe(&dir.join("Accio Helper.exe")));
+        assert!(!is_accio_exe(&dir.join("Uninstall Accio.exe")));
+        assert!(!is_accio_exe(&dir.join("Other.exe")));
+        fs::remove_file(dir.join("resources").join("app.asar")).unwrap();
+        assert!(!is_accio_exe(&dir.join("Accio.exe")));
+        let _ = fs::remove_dir_all(dir);
     }
 
     #[test]
