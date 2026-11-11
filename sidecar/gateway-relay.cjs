@@ -3,6 +3,8 @@ const http = require("node:http");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
+const { gunzipSync, inflateSync, brotliDecompressSync } = require("node:zlib");
+const { isImagePayload } = require("./image-payload.cjs");
 
 const HOST = "127.0.0.1";
 const PORT = Number(process.env.ACCIO_RELAY_PORT || 18767);
@@ -19,7 +21,10 @@ const LOG_PATH = process.env.ACCIO_RELAY_LOG || "";
 const MODEL_CACHE_PATH = process.env.ACCIO_MODEL_CACHE_PATH || path.join(os.homedir(), ".accio", "model_cache.json");
 const MODEL_LABEL_SEPARATOR = " | Accio: ";
 const MODEL_CATALOG_TTL_SECONDS = 5;
+// custom：对话和生图都交给模型桥；official：全部走官方；
+// official_image：对话走官方，只把生图 / 改图交给模型桥的图片通道
 const ROUTE_MODE = (process.env.ACCIO_ROUTE_MODE || "custom").trim();
+const OFFICIAL_CHAT = ROUTE_MODE === "official" || ROUTE_MODE === "official_image";
 const DEFAULT_MODEL_PATHS = [
   "/api/adk/llm/generateContent",
   "/api/adk/llm/streamGenerateContent",
@@ -98,6 +103,22 @@ function isModelPath(pathname) {
 
 function isImagePath(pathname) {
   return IMAGE_PATHS.includes(pathname);
+}
+
+// 只用来判断是不是生图请求；转发时仍发原始字节（保留压缩）
+function isImageRequestBody(request, body) {
+  try {
+    const encoding = getHeader(request, "content-encoding").trim().toLowerCase() || "identity";
+    const options = { maxOutputLength: MAX_BODY_BYTES };
+    let raw = body;
+    if (encoding === "gzip") raw = gunzipSync(body, options);
+    else if (encoding === "deflate") raw = inflateSync(body, options);
+    else if (encoding === "br") raw = brotliDecompressSync(body, options);
+    else if (encoding !== "identity") return false;
+    return isImagePayload(JSON.parse(raw.toString("utf8")));
+  } catch {
+    return false;
+  }
 }
 
 function stripActualModelLabel(value) {
@@ -266,7 +287,7 @@ const server = http.createServer(async (request, response) => {
     lastClientRequestAt = Date.now();
     const pathname = new URL(request.url || "/", `http://${HOST}:${PORT}`).pathname;
     if (request.method === "POST" && pathname === "/api/llm/config/v2") {
-      if (ROUTE_MODE === "official") {
+      if (OFFICIAL_CHAT) {
         await forward(request, response, ORIGINAL_GATEWAY);
         return;
       }
@@ -281,7 +302,17 @@ const server = http.createServer(async (request, response) => {
     }
     const modelRequest = request.method === "POST" && isModelPath(pathname);
     const imageHttpRequest = request.method === "POST" && isImagePath(pathname);
-    if (ROUTE_MODE === "official") {
+    if (ROUTE_MODE === "official_image" && modelRequest) {
+      const body = await readBody(request);
+      if (isImageRequestBody(request, body)) {
+        logRoute(`image ${request.method} ${pathname} -> ${MODEL_BRIDGE}`);
+        await forward(request, response, MODEL_BRIDGE, body);
+      } else {
+        await forward(request, response, ORIGINAL_GATEWAY, body);
+      }
+      return;
+    }
+    if (OFFICIAL_CHAT) {
       await forward(request, response, isLocalRuntimeRequest(pathname) ? LOCAL_GATEWAY : ORIGINAL_GATEWAY);
       return;
     }

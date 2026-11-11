@@ -4,6 +4,8 @@
 
 - 修复打开图片通道后，Accio 生图（`image_generate` / `image_edit`）仍交给对话模型、最后报 `No image found in AccioLlm response` 的问题。Accio 生图走对话接口 `/api/adk/llm/generateContent`，并把 `generationConfig` 转成 JSON 字符串放进 `properties.generationConfig`，模型桥之前只检查顶层的 `generationConfig`，所以没认出来。现在也读取 `properties` 里的设置和 `media_operation`，识别出生图请求后交给图片通道。Accio 看图（`see_image`）只要文字，不受影响。
 - 图片模型是 gpt-image 系列时，按 Accio 要求的画面比例传 `size`（横图 1536x1024、竖图 1024x1536、方图 1024x1024）。模型桥日志记下每次生图的模型、尺寸和参考图数量。
+- 改图时把 Accio 给的全部参考图都发给图片模型（多张时用 `image[]` 逐张附上，最多 16 张），之前只发第一张。只有一张时仍用 `image` 字段。2026-11-12 用 Novaferry gpt-image-2.6 实测三张参考图都用上了。
+- 对话选「官方」时也能单独用图片通道：图片通道已开启且填了自己的 API Key 时，中继只把生图 / 改图请求交给模型桥，对话、看图和其他请求照旧走官方，压缩的请求原样转发。官方模式下图片通道没有自己的 Key 时不启动模型桥，生图仍走官方。修改图片通道设置后，官方模式下也会立即生效。界面在官方模式下提示需要单独填 Key。Accio 新的 REST 生图接口（`/api/media/image/*`）在官方模式下仍走官方；本机 Accio 目前的生图都走对话接口。
 - 模型接口返回错误时，模型桥日志除了状态码，也记下接口返回的报错内容（最多 300 字）。
 - 2026-11-11 在 Mac 上核实 Accio 0.38.2：仍读取 `GATEWAY_BASE_URL`，对话、模型列表和网关请求都经过中继，用自定义供应商（gpt-6.1-sol）对话正常，AC-Switch 不需要为 0.38.2 改接入方式。Windows 版未核实。
 

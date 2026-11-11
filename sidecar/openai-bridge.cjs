@@ -1,5 +1,6 @@
 const http = require("node:http");
 const { gunzip } = require("node:zlib");
+const { imageGenerationConfig, isImagePayload } = require("./image-payload.cjs");
 const { promisify } = require("node:util");
 const { reasoningOptions } = require("./reasoning-options.cjs");
 const gunzipAsync = promisify(gunzip);
@@ -17,6 +18,8 @@ const IMAGE_ENABLED = process.env.ACCIO_IMAGE_ENABLED === "true";
 const IMAGE_ENDPOINT = (process.env.OPENCODE_GO_IMAGE_ENDPOINT || "").trim();
 const IMAGE_MODEL = (process.env.OPENCODE_GO_IMAGE_MODEL || "").trim();
 const IMAGE_API_KEY = (process.env.OPENCODE_GO_IMAGE_API_KEY || "").trim();
+// OpenAI 改图接口一次最多收 16 张参考图
+const MAX_IMAGE_REFERENCES = 16;
 const MAX_BODY_BYTES = 32 * 1024 * 1024;
 const reasoningByToolCallId = new Map();
 let resolvedModel = MODEL;
@@ -366,39 +369,6 @@ function imageEndpoint(kind) {
     : "https://api.openai.com/v1/images/generations";
 }
 
-function parseMaybeJson(value) {
-  if (typeof value !== "string") return value;
-  try {
-    return JSON.parse(value);
-  } catch {
-    return undefined;
-  }
-}
-
-// Accio 的生图（image_generate / image_edit 走 AccioLlm）会把 generationConfig 转成 JSON 字符串放进
-// properties.generationConfig，并在 properties.media_operation 里标明 IMAGE_GENERATION / IMAGE_EDIT
-function imageGenerationConfig(payload) {
-  const properties = payload?.properties;
-  const candidates = [
-    payload?.generationConfig,
-    payload?.generation_config,
-    parseMaybeJson(properties?.generationConfig),
-    parseMaybeJson(properties?.generation_config),
-  ];
-  return candidates.find((item) => item && typeof item === "object") || {};
-}
-
-function isImagePayload(payload) {
-  const generationConfig = imageGenerationConfig(payload);
-  const responseModalities = generationConfig.responseModalities ?? generationConfig.response_modalities;
-  if (Array.isArray(responseModalities) && responseModalities.some((item) => String(item).trim().toUpperCase() === "IMAGE")) {
-    return true;
-  }
-  const operation = String(payload?.properties?.media_operation || "").trim().toUpperCase();
-  if (operation === "IMAGE_GENERATION" || operation === "IMAGE_EDIT") return true;
-  return Boolean(payload?.prompt && (payload?.image || payload?.images || payload?.mask));
-}
-
 // gpt-image 只接受这三种尺寸，按 Accio 给的比例（aspectRatio 或 layoutSize）选最接近的一种
 function imageSizeFor(payload) {
   if (!IMAGE_MODEL.startsWith("gpt-image-")) return undefined;
@@ -604,11 +574,15 @@ async function generateImage(prompt, references, size) {
   form.set("prompt", prompt);
   if (size) form.set("size", size);
   if (!model.startsWith("gpt-image-")) form.set("response_format", "b64_json");
-  const source = references[0];
-  const blob = source.startsWith("data:")
-    ? await fetch(source).then((item) => item.blob())
-    : new Blob([Buffer.from(source, "base64")], { type: "image/png" });
-  form.set("image", blob, "image.png");
+  // 多张参考图用 image[] 逐张附上（OpenAI 改图接口的写法），只有一张时仍用 image，兼容只认单图的接口
+  const field = references.length > 1 ? "image[]" : "image";
+  for (const [index, source] of references.entries()) {
+    const blob = source.startsWith("data:")
+      ? await fetch(source).then((item) => item.blob())
+      : new Blob([Buffer.from(source, "base64")], { type: "image/png" });
+    const ext = (blob.type.split("/")[1] || "png").replace("jpeg", "jpg");
+    form.append(field, blob, `image-${index + 1}.${ext}`);
+  }
   const headers = imageAuthHeaders();
   const upstream = await fetch(endpoint, { method: "POST", headers, body: form });
   const body = await upstream.text();
@@ -639,7 +613,11 @@ async function proxyImage(request, response, payload) {
   }
   const stopKeepalive = startKeepalive(response);
   try {
-    const references = inlineImages(payload);
+    const allReferences = inlineImages(payload);
+    const references = allReferences.slice(0, MAX_IMAGE_REFERENCES);
+    if (allReferences.length > references.length) {
+      console.log(`image references truncated ${allReferences.length} -> ${references.length}`);
+    }
     const size = imageSizeFor(payload);
     console.log(`image ${references.length > 0 ? "edit" : "generate"} model=${IMAGE_MODEL} size=${size || "-"} references=${references.length}`);
     const image = await generateImage(prompt, references, size);

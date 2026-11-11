@@ -248,6 +248,49 @@ test('Accio image_generate / image_edit via AccioLlm reach the image channel, se
   assert.match(requests[1].data, /name="size"\r\n\r\n1024x1536/);
 });
 
+test('image_edit sends every reference image as image[]; a single reference stays image', async t => {
+  const requests = [];
+  const upstream = await server(t, async (req, res) => {
+    requests.push(await body(req));
+    res.end(JSON.stringify({ data: [{ b64_json: png }] }));
+  });
+  const url = await bridge(t, upstream, { ACCIO_IMAGE_ENABLED: 'true', OPENCODE_GO_IMAGE_MODEL: 'gpt-image-2.6', OPENCODE_GO_IMAGE_ENDPOINT: upstream + '/v1/images/generations' });
+  const accio = parts => ({ model: 'gpt-image-2', contents: [{ role: 'user', parts }],
+    properties: { generationConfig: JSON.stringify({ responseModalities: ['TEXT', 'IMAGE'] }), media_operation: 'IMAGE_EDIT' } });
+  const ref = { inlineData: { mimeType: 'image/png', data: png } };
+  const jpg = { inlineData: { mimeType: 'image/jpeg', data: png } };
+  assert.equal(frames(await post(url, accio([ref, ref, jpg, { text: 'merge them' }]))).at(-1).content.parts[1].inlineData.data, png);
+  assert.equal(frames(await post(url, accio([ref, { text: 'one' }]))).at(-1).content.parts[1].inlineData.data, png);
+  assert.equal((requests[0].match(/name="image\[\]"/g) || []).length, 3);
+  assert.match(requests[0], /filename="image-3\.jpg"/);
+  assert.equal((requests[1].match(/name="image"; filename/g) || []).length, 1);
+  assert.doesNotMatch(requests[1], /image\[\]/);
+});
+
+test('relay official_image: chat stays official, only image requests go to the bridge', async t => {
+  const official = [];
+  const upstream = await server(t, async (req, res) => {
+    official.push({ url: req.url, encoding: req.headers['content-encoding'] || '', bytes: (await body(req)).length });
+    res.end(JSON.stringify({ target: 'official' }));
+  });
+  const local = await server(t, async (req, res) => { res.end(JSON.stringify({ target: 'local' })); });
+  const model = await server(t, async (req, res) => { await body(req); res.end(JSON.stringify({ target: 'model' })); });
+  const url = await sidecar(t, 'gateway-relay.cjs', { ACCIO_ROUTE_MODE: 'official_image', ACCIO_ORIGINAL_GATEWAY_URL: upstream, ACCIO_LOCAL_GATEWAY_URL: local, ACCIO_MODEL_BRIDGE_URL: model });
+  const image = { model: 'gpt-image-2', contents: [{ role: 'user', parts: [{ text: 'draw' }] }],
+    properties: { generationConfig: JSON.stringify({ responseModalities: ['TEXT', 'IMAGE'] }), media_operation: 'IMAGE_GENERATION' } };
+  const see = { contents: [{ role: 'user', parts: [{ text: 'look' }] }], properties: { generationConfig: JSON.stringify({ responseModalities: ['TEXT'] }) } };
+  assert.equal(JSON.parse(await post(url, payload)).target, 'official');
+  assert.equal(JSON.parse(await post(url, see)).target, 'official');
+  assert.equal(JSON.parse(await post(url, image)).target, 'model');
+  assert.equal(JSON.parse(await postGzip(url, image)).target, 'model');
+  assert.equal(JSON.parse(await postGzip(url, payload)).target, 'official');
+  assert.equal(JSON.parse(await post(url, payload, '/api/llm/config/v2')).target, 'official');
+  assert.equal(JSON.parse(await post(url, payload, '/skills/catalog')).target, 'local');
+  // 转给官方的压缩请求保持原样
+  const gz = official.find(item => item.encoding === 'gzip');
+  assert.equal(gz.bytes, gzipSync(JSON.stringify(payload)).length);
+});
+
 test('relay official/custom/default/local routing and catalog fallback body', async t => {
   const upstream = await server(t, async (req, res) => { res.end(JSON.stringify({ target: 'official', body: await body(req) })); });
   const local = await server(t, async (req, res) => { res.end(JSON.stringify({ target: 'local' })); });

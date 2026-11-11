@@ -987,7 +987,8 @@ fn start_backend_inner(
         return Err("OpenCode Go 需要 API Key。请先在供应商里填写 sk- 开头的 Key，或确认 ~/.local/share/opencode/auth.json 已有 opencode-go.key".into());
     }
     let log_dir = config_dir()?;
-    let api_provider = if provider.kind == "custom_openai" {
+    // 官方模式只为图片通道启动模型桥，按自定义接口启动，不涉及对话参数
+    let api_provider = if provider.kind == "custom_openai" || official {
         "custom_openai"
     } else {
         "opencode_go"
@@ -1000,12 +1001,19 @@ fn start_backend_inner(
     };
     let (model_paths, image_paths) = detect_accio_paths();
     let image = with_image_has_key(load_config()?.image_channel);
-    let image_enabled = !official && image.enabled && !image.model.trim().is_empty();
-    let image_key = if image_enabled {
+    let image_key = if image.enabled && !image.model.trim().is_empty() {
         secret_get(IMAGE_ACCOUNT, "image")?.unwrap_or_default()
     } else {
         String::new()
     };
+    // 官方模式没有对话 Key 可借，图片通道必须有自己的 Key 才启用
+    let image_enabled =
+        image.enabled && !image.model.trim().is_empty() && (!official || !image_key.is_empty());
+    if official && image.enabled && !image.model.trim().is_empty() && image_key.is_empty() {
+        switch_log("official mode: image channel enabled but has no own key; image requests stay official");
+    }
+    // 对话走官方时，只有图片通道启用才需要模型桥
+    let run_bridge = !official || image_enabled;
     switch_log(&format!(
         "start_backend provider={} kind={} auth_type={} protocol={} key_len={} official={} image_enabled={} image_model={}",
         provider.id,
@@ -1021,20 +1029,24 @@ fn start_backend_inner(
     let mut runtime = state.runtime.lock().map_err(|e| e.to_string())?;
     stop_child(&mut runtime.relay);
     stop_child(&mut runtime.bridge);
-    if !official {
+    if run_bridge {
         clear_owned_orphans(bridge_port(), &node, &bridge_script)?;
     }
     clear_owned_orphans(relay_port(), &node, &relay_script)?;
 
     let result = (|| -> Result<(), String> {
-        if !official {
+        if run_bridge {
             let bridge_env = vec![
                 ("ACCIO_OPENCODE_PORT", bridge_port().to_string()),
                 ("OPENCODE_GO_MODEL", provider.model.clone()),
                 ("OPENCODE_GO_ENDPOINT", provider.endpoint.clone()),
                 (
                     "OPENCODE_GO_REASONING_EFFORT",
-                    provider.reasoning_effort.clone(),
+                    if official {
+                        "disabled".into()
+                    } else {
+                        provider.reasoning_effort.clone()
+                    },
                 ),
                 ("ACCIO_MODEL_AUTH_TYPE", auth_type.to_string()),
                 ("ACCIO_API_PROVIDER", api_provider.to_string()),
@@ -1066,7 +1078,9 @@ fn start_backend_inner(
             ("ACCIO_MODEL_BRIDGE_URL", bridge_url()),
             (
                 "ACCIO_ROUTE_MODE",
-                if official {
+                if official && image_enabled {
+                    "official_image".into()
+                } else if official {
                     "official".into()
                 } else {
                     "custom".into()
@@ -1086,12 +1100,12 @@ fn start_backend_inner(
             &log_dir.join("relay-stdout.log"),
         )?);
         std::thread::sleep(Duration::from_millis(150));
-        if !official {
+        if run_bridge {
             ensure_running(&mut runtime.bridge, "model bridge")?;
         }
         ensure_running(&mut runtime.relay, "gateway relay")?;
 
-        if !official {
+        if run_bridge {
             wait_health(&format!("{}/healthz", bridge_url()))?;
         }
         wait_health(&format!("{}/healthz", relay_url()))?;
@@ -1290,9 +1304,8 @@ fn upsert_image_channel(
         cfg.image_channel.endpoint = input.endpoint.trim().to_string();
         cfg.image_channel.model = input.model.trim().to_string();
         save_config(&cfg)?;
-        if cfg.active_provider_id != "official" {
-            restart_active_backend(&app, &state)?;
-        }
+        // 官方模式下图片通道也经过模型桥，开关或改设置都要重启中继
+        restart_active_backend(&app, &state)?;
         get_config()?
     };
     Ok(config)
