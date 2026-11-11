@@ -226,6 +226,28 @@ for (const ownKey of [true, false]) {
   });
 }
 
+test('Accio image_generate / image_edit via AccioLlm reach the image channel, see_image stays on chat', async t => {
+  const requests = [];
+  const upstream = await server(t, async (req, res) => {
+    const data = await body(req); requests.push({ url: req.url, data });
+    if (req.url.startsWith('/v1/images/')) return res.end(JSON.stringify({ data: [{ b64_json: png }] }));
+    res.setHeader('Content-Type', 'text/event-stream'); chat(res, { content: 'a cat' }, 'stop'); res.end('data: [DONE]\n\n');
+  });
+  const url = await bridge(t, upstream, { ACCIO_IMAGE_ENABLED: 'true', OPENCODE_GO_IMAGE_MODEL: 'gpt-image-2.6', OPENCODE_GO_IMAGE_ENDPOINT: upstream + '/v1/images/generations' });
+  // Accio 0.37 的 convertRequestToProto：generationConfig 变成 properties 里的 JSON 字符串
+  const accio = (parts, generationConfig, extra = {}) => ({ model: 'gpt-image-2', iaiTag: 'pheonix_image_edit', contents: [{ role: 'user', parts }],
+    properties: { generationConfig: JSON.stringify(generationConfig), normalized_response: 'true', ...extra } });
+  const generate = frames(await post(url, accio([{ text: 'draw a chair' }], { responseModalities: ['TEXT', 'IMAGE'], imageConfig: { aspectRatio: '16:9', imageSize: '2K' } })));
+  assert.equal(generate.at(-1).content.parts[1].inlineData.data, png);
+  const edit = frames(await post(url, accio([{ text: 'make it red' }, { inlineData: { mimeType: 'image/png', data: png } }], { responseModalities: ['TEXT', 'IMAGE'], imageConfig: { layoutSize: '768x1024' } }, { media_operation: 'IMAGE_EDIT' })));
+  assert.equal(edit.at(-1).content.parts[1].inlineData.data, png);
+  const see = frames(await post(url, accio([{ text: 'describe' }, { inlineData: { mimeType: 'image/png', data: png } }], { responseModalities: ['TEXT'] })));
+  assert.equal(see.find(f => f.content?.parts?.[0]?.text === 'a cat')?.partial, true);
+  assert.deepEqual(requests.map(r => r.url), ['/v1/images/generations', '/v1/images/edits', '/v1/chat/completions']);
+  assert.equal(JSON.parse(requests[0].data).size, '1536x1024');
+  assert.match(requests[1].data, /name="size"\r\n\r\n1024x1536/);
+});
+
 test('relay official/custom/default/local routing and catalog fallback body', async t => {
   const upstream = await server(t, async (req, res) => { res.end(JSON.stringify({ target: 'official', body: await body(req) })); });
   const local = await server(t, async (req, res) => { res.end(JSON.stringify({ target: 'local' })); });

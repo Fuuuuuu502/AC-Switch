@@ -366,13 +366,51 @@ function imageEndpoint(kind) {
     : "https://api.openai.com/v1/images/generations";
 }
 
+function parseMaybeJson(value) {
+  if (typeof value !== "string") return value;
+  try {
+    return JSON.parse(value);
+  } catch {
+    return undefined;
+  }
+}
+
+// Accio 的生图（image_generate / image_edit 走 AccioLlm）会把 generationConfig 转成 JSON 字符串放进
+// properties.generationConfig，并在 properties.media_operation 里标明 IMAGE_GENERATION / IMAGE_EDIT
+function imageGenerationConfig(payload) {
+  const properties = payload?.properties;
+  const candidates = [
+    payload?.generationConfig,
+    payload?.generation_config,
+    parseMaybeJson(properties?.generationConfig),
+    parseMaybeJson(properties?.generation_config),
+  ];
+  return candidates.find((item) => item && typeof item === "object") || {};
+}
+
 function isImagePayload(payload) {
-  const generationConfig = payload?.generationConfig ?? payload?.generation_config;
-  const responseModalities = generationConfig?.responseModalities ?? generationConfig?.response_modalities;
+  const generationConfig = imageGenerationConfig(payload);
+  const responseModalities = generationConfig.responseModalities ?? generationConfig.response_modalities;
   if (Array.isArray(responseModalities) && responseModalities.some((item) => String(item).trim().toUpperCase() === "IMAGE")) {
     return true;
   }
+  const operation = String(payload?.properties?.media_operation || "").trim().toUpperCase();
+  if (operation === "IMAGE_GENERATION" || operation === "IMAGE_EDIT") return true;
   return Boolean(payload?.prompt && (payload?.image || payload?.images || payload?.mask));
+}
+
+// gpt-image 只接受这三种尺寸，按 Accio 给的比例（aspectRatio 或 layoutSize）选最接近的一种
+function imageSizeFor(payload) {
+  if (!IMAGE_MODEL.startsWith("gpt-image-")) return undefined;
+  const imageConfig = imageGenerationConfig(payload).imageConfig ?? {};
+  const source = String(payload?.aspect_ratio || payload?.aspectRatio || imageConfig.aspectRatio || imageConfig.layoutSize || "");
+  const match = /^(\d+(?:\.\d+)?)\s*[:x]\s*(\d+(?:\.\d+)?)$/i.exec(source.trim());
+  if (!match) return undefined;
+  const ratio = Number(match[1]) / Number(match[2]);
+  if (!Number.isFinite(ratio) || ratio <= 0) return undefined;
+  if (ratio > 1.1) return "1536x1024";
+  if (ratio < 0.9) return "1024x1536";
+  return "1024x1024";
 }
 
 function lastUserPrompt(payload) {
@@ -473,7 +511,10 @@ async function handleUpstreamError(response, upstream, authorizationAttached, en
     message = parsed?.error?.message || parsed?.error || parsed?.message || message;
     if (typeof message !== "string") message = JSON.stringify(message);
   } catch {}
-  console.error(`upstream HTTP ${upstream.status} authorizationAttached=${authorizationAttached} endpoint=${endpoint}`);
+  console.error(
+    `upstream HTTP ${upstream.status} authorizationAttached=${authorizationAttached} endpoint=${endpoint} ` +
+      `message=${String(message || upstream.statusText).replace(/\s+/g, " ").slice(0, 300)}`,
+  );
   errorFrame(
     response,
     `UPSTREAM_HTTP_${upstream.status}`,
@@ -534,7 +575,7 @@ function toResponsesRequest(payload) {
   return request;
 }
 
-async function generateImage(prompt, references) {
+async function generateImage(prompt, references, size) {
   const model = IMAGE_MODEL;
   if (!model) throw new Error("image model is not configured");
   const kind = references.length > 0 ? "edit" : "generate";
@@ -547,6 +588,7 @@ async function generateImage(prompt, references) {
         model,
         prompt,
         n: 1,
+        ...(size ? { size } : {}),
         ...(!model.startsWith("gpt-image-") ? { response_format: "b64_json" } : {}),
       }),
     });
@@ -560,6 +602,7 @@ async function generateImage(prompt, references) {
   const form = new FormData();
   form.set("model", model);
   form.set("prompt", prompt);
+  if (size) form.set("size", size);
   if (!model.startsWith("gpt-image-")) form.set("response_format", "b64_json");
   const source = references[0];
   const blob = source.startsWith("data:")
@@ -596,7 +639,10 @@ async function proxyImage(request, response, payload) {
   }
   const stopKeepalive = startKeepalive(response);
   try {
-    const image = await generateImage(prompt, inlineImages(payload));
+    const references = inlineImages(payload);
+    const size = imageSizeFor(payload);
+    console.log(`image ${references.length > 0 ? "edit" : "generate"} model=${IMAGE_MODEL} size=${size || "-"} references=${references.length}`);
+    const image = await generateImage(prompt, references, size);
     sendFrame(response, {
       content: {
         role: "model",
