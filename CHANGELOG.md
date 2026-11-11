@@ -1,6 +1,6 @@
 # 版本记录
 
-## 未发布
+## 0.1.11 — 2026-11-12
 
 - 修复打开图片通道后，Accio 生图（`image_generate` / `image_edit`）仍交给对话模型、最后报 `No image found in AccioLlm response` 的问题。Accio 生图走对话接口 `/api/adk/llm/generateContent`，并把 `generationConfig` 转成 JSON 字符串放进 `properties.generationConfig`，模型桥之前只检查顶层的 `generationConfig`，所以没认出来。现在也读取 `properties` 里的设置和 `media_operation`，识别出生图请求后交给图片通道。Accio 看图（`see_image`）只要文字，不受影响。
 - 图片模型是 gpt-image 系列时，按 Accio 要求的画面比例传 `size`（横图 1536x1024、竖图 1024x1536、方图 1024x1024）。模型桥日志记下每次生图的模型、尺寸和参考图数量。
