@@ -44,7 +44,7 @@ jobs:
       fail-fast: true
       matrix:
         include:
-          - os: macos-14
+          - os: macos-latest
             prepare: sh scripts/prepare-node.sh
             bundle: src-tauri/target/release/bundle/dmg/*.dmg
           - os: windows-latest
